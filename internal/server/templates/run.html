@@ -1,0 +1,44 @@
+{{define "content"}}
+<h1 id="title">Run</h1>
+<p id="meta" class="muted"></p>
+<div class="card" id="progress-card" hidden>
+  <div class="progress"><div class="progress-bar" id="pbar"></div></div>
+  <p class="muted" id="ptext"></p>
+</div>
+<h2>Log</h2>
+<pre class="code log" id="log"></pre>
+<script>
+const runID = document.body.dataset.id;
+async function load() {
+  const d = await api('GET', '/api/admin/runs/' + runID);
+  const r = d.run;
+  el('title').innerHTML = `${statusBadge(r.Status)} ${esc(r.job_name)} <span class="muted">(${esc(r.Mode)})</span>`;
+  let meta = `Client ${esc(r.agent_name)} · created ${fmtTime(r.CreatedAt)}`;
+  if (r.FinishedAt) meta += ` · finished ${fmtTime(r.FinishedAt)} · took ${fmtDuration(r)}`;
+  if (r.Stats) {
+    try {
+      const s = JSON.parse(r.Stats);
+      if (s.files_total || s.bytes_uploaded)
+        meta += ` · ${s.files_total} files, ${s.files_changed} changed, ${s.files_skipped} skipped · uploaded ${fmtBytes(s.bytes_uploaded)}`;
+    } catch {}
+  }
+  el('meta').innerHTML = meta + (r.Error ? `<br><span class="err">${esc(r.Error)}</span>` : '');
+
+  const running = r.Status === 'running';
+  el('progress-card').hidden = !running;
+  if (running && r.Progress) {
+    try {
+      const p = JSON.parse(r.Progress);
+      const pct = p.bytes_total > 0 ? Math.min(100, 100 * p.bytes_done / p.bytes_total) : 0;
+      el('pbar').style.width = pct + '%';
+      el('ptext').textContent = `${p.phase}: ${p.files_done}/${p.files_total} files · ${fmtBytes(p.bytes_done)} / ${fmtBytes(p.bytes_total)}`;
+    } catch {}
+  }
+  el('log').textContent = d.logs
+    ? d.logs.map(l => `${new Date(l.TS).toISOString()} [${l.Level}] ${l.Message}`).join('\n')
+    : '';
+  if (running || r.Status === 'queued') setTimeout(load, 2000);
+}
+load();
+</script>
+{{end}}

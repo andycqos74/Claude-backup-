@@ -1,0 +1,94 @@
+{{define "content"}}
+<h1 id="title">Backup job</h1>
+<form id="job-form" class="form-card">
+  <input type="hidden" name="id">
+  <input type="hidden" name="agent_id">
+  <label>Name <input name="name" required placeholder="e.g. documents"></label>
+  <label>Paths to back up (one per line)
+    <textarea name="paths" rows="4" required placeholder="/home/user/documents&#10;C:\Data"></textarea></label>
+  <label>Exclude patterns (one per line, glob)
+    <textarea name="excludes" rows="3" placeholder="*.tmp&#10;node_modules&#10;.cache"></textarea></label>
+  <div class="row">
+    <label>Schedule (cron, empty = manual only)
+      <input name="schedule" placeholder="0 2 * * *"></label>
+    <label>Full backup every Nth run (0 = always incremental)
+      <input name="full_every" type="number" min="0" value="0"></label>
+  </div>
+  <div class="row">
+    <label>Keep last N snapshots (0 = keep all)
+      <input name="keep_last" type="number" min="0" value="0"></label>
+    <label>Also keep snapshots newer than N days
+      <input name="keep_days" type="number" min="0" value="0"></label>
+  </div>
+  <div class="row">
+    <label>Pre-backup hook (shell command, optional)
+      <input name="pre_hook" placeholder="docker exec db pg_dump -U app app > /backup/db.sql"></label>
+    <label>Post-backup hook (optional)
+      <input name="post_hook"></label>
+  </div>
+  <div class="row">
+    <label class="check"><input name="enabled" type="checkbox" checked> Enabled</label>
+    <label class="check"><input name="catchup" type="checkbox" checked> Run missed schedule when client reconnects</label>
+  </div>
+  <div class="row">
+    <button class="btn primary" type="submit">Save job</button>
+    <button class="btn danger" type="button" id="del-btn" hidden onclick="delJob()">Delete job</button>
+  </div>
+</form>
+<script>
+const jobID = document.body.dataset.id;
+const form = document.getElementById('job-form');
+const params = new URLSearchParams(location.search);
+let agentID = params.get('agent') || '';
+
+async function load() {
+  if (!jobID) {
+    form.agent_id.value = agentID;
+    return;
+  }
+  const jobs = await api('GET', '/api/admin/jobs');
+  const j = jobs.find(x => x.id === jobID);
+  if (!j) { toast('job not found'); return; }
+  agentID = j.agent_id;
+  el('title').textContent = 'Job: ' + j.name;
+  el('del-btn').hidden = false;
+  form.id.value = j.id;
+  form.agent_id.value = j.agent_id;
+  form.name.value = j.name;
+  form.paths.value = j.paths.join('\n');
+  form.excludes.value = (j.excludes || []).join('\n');
+  form.schedule.value = j.schedule || '';
+  form.full_every.value = j.full_every || 0;
+  form.keep_last.value = j.keep_last || 0;
+  form.keep_days.value = j.keep_days || 0;
+  form.pre_hook.value = j.pre_hook || '';
+  form.post_hook.value = j.post_hook || '';
+  form.enabled.checked = j.enabled;
+  form.catchup.checked = !!j.catchup;
+}
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const lines = v => v.split('\n').map(x => x.trim()).filter(Boolean);
+  const body = {
+    id: form.id.value, agent_id: form.agent_id.value,
+    name: form.name.value.trim(),
+    paths: lines(form.paths.value), excludes: lines(form.excludes.value),
+    schedule: form.schedule.value.trim(),
+    full_every: +form.full_every.value, keep_last: +form.keep_last.value, keep_days: +form.keep_days.value,
+    pre_hook: form.pre_hook.value.trim(), post_hook: form.post_hook.value.trim(),
+    enabled: form.enabled.checked, catchup: form.catchup.checked,
+  };
+  try {
+    const saved = await api('POST', '/api/admin/jobs', body);
+    toast('Job saved');
+    location.href = '/clients/' + saved.agent_id;
+  } catch (err) { toast(err.message); }
+});
+async function delJob() {
+  if (!confirm('Delete this job? Existing snapshots are kept until deleted manually.')) return;
+  await api('DELETE', '/api/admin/jobs/' + jobID);
+  location.href = '/clients/' + agentID;
+}
+load();
+</script>
+{{end}}

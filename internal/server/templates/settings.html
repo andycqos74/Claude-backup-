@@ -1,0 +1,51 @@
+{{define "content"}}
+<h1>Settings</h1>
+
+<h2>Server identity</h2>
+<div class="card">
+  <p>TLS certificate SHA-256 fingerprint (agents pin this at enrollment):</p>
+  <pre class="code" id="fp"></pre>
+</div>
+
+<h2>Storage</h2>
+<div class="cards">
+  <div class="card"><div class="stat" id="st-snaps">–</div><div class="muted">snapshots</div></div>
+  <div class="card"><div class="stat" id="st-blobs">–</div><div class="muted">unique file blobs</div></div>
+  <div class="card"><div class="stat" id="st-stored">–</div><div class="muted">stored (compressed)</div></div>
+  <div class="card"><div class="stat" id="st-raw">–</div><div class="muted">protected data</div></div>
+</div>
+<p><button class="btn" onclick="runGC()">Run retention + cleanup now</button>
+<span class="muted">Applies retention policies and removes unreferenced data. Also runs automatically once a day.</span></p>
+
+<h2>Change password</h2>
+<form id="pw-form" class="form-card">
+  <label>Current password <input name="old" type="password" autocomplete="current-password" required></label>
+  <label>New password (min 8 characters) <input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
+  <button class="btn primary" type="submit">Change password</button>
+</form>
+<script>
+async function load() {
+  const d = await api('GET', '/api/admin/settings');
+  el('fp').textContent = d.fingerprint;
+  el('st-snaps').textContent = d.stats.Snapshots;
+  el('st-blobs').textContent = d.stats.Blobs;
+  el('st-stored').textContent = fmtBytes(d.stats.SizeStored);
+  el('st-raw').textContent = fmtBytes(d.stats.SizeRaw);
+}
+async function runGC() {
+  toast('Cleanup started…');
+  try { await api('POST', '/api/admin/gc'); toast('Cleanup finished'); load(); }
+  catch (err) { toast(err.message); }
+}
+document.getElementById('pw-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await api('POST', '/api/admin/password', {old: f.get('old'), new: f.get('new')});
+    toast('Password changed');
+    e.target.reset();
+  } catch (err) { toast(err.message); }
+});
+load();
+</script>
+{{end}}
