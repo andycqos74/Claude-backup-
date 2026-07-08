@@ -148,15 +148,32 @@ curl -fsSLk https://<server>:8443/static/install-agent.sh | sudo bash -s -- \
 Installs the agent, enrolls it, and runs it as the `backup-agent` systemd
 service.
 
-### Windows Server (elevated PowerShell)
+### Windows Server / Windows 11 (elevated PowerShell)
+
+Use the exact command from the GUI's enrollment dialog (**Clients → Enroll
+new client**) — it's generated fresh with the current token and
+fingerprint, and is kept up to date with the compatibility fixes below.
+The gist of what it does:
 
 ```powershell
-[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}
-iwr https://<server>:8443/static/install-agent.ps1 -UseBasicParsing -OutFile install-agent.ps1
-.\install-agent.ps1 -Server https://<server>:8443 -Token <TOKEN> -Fingerprint <FP>
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+# ... TLS/cert-trust setup for the self-signed cert (version-aware for
+#     PowerShell 5.1 vs 7+) ...
+iwr -UseBasicParsing -Uri https://<server>:8443/static/install-agent.ps1 -OutFile $env:TEMP\install-agent.ps1
+& $env:TEMP\install-agent.ps1 -Server https://<server>:8443 -Token <TOKEN> -Fingerprint <FP>
 ```
 
-Installs and starts the `CentralBackupAgent` Windows service.
+Installs and starts the `CentralBackupAgent` Windows service. Notes from
+real-world deployment:
+
+- `Set-ExecutionPolicy -Scope Process` only affects the current PowerShell
+  process (not the machine or user), but is required on any machine with
+  the (common, often-default) `Restricted` policy — without it, running
+  the downloaded `.ps1` fails with *"running scripts is disabled on this
+  system"*.
+- See the TLS handshake troubleshooting note in the quick-path section
+  above if `Invoke-WebRequest` fails with *"An unexpected error occurred
+  on a send"*.
 
 ### Docker host
 

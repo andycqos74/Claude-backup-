@@ -41,7 +41,8 @@ async function newToken() {
   // than the ServerCertificateValidationCallback delegate in locked-down
   // or AV/EDR-monitored environments.
   el('cmd-win').textContent =
-`if ($PSVersionTable.PSVersion.Major -lt 6) {
+`Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+if ($PSVersionTable.PSVersion.Major -lt 6) {
   if (-not ('CBTrustAllCertsPolicy' -as [type])) {
     Add-Type @"
 using System.Net;
