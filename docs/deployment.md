@@ -50,6 +50,17 @@ Windows notes:
 - The `CB_SERVER_NAME` value only needs to match for the *browser* to
   avoid an extra warning; the agent verifies the server by certificate
   **fingerprint**, not hostname, so it works even over a bare IP.
+- If `Invoke-WebRequest`/`iwr` fails with *"The underlying connection was
+  closed: An unexpected error occurred on a send"* on Windows PowerShell
+  5.1, that's `.NET Framework` failing the TLS handshake — the server
+  fixed this by using an RSA certificate and capping to TLS 1.2, which
+  every client supports. If you're still hitting it, you're likely running
+  an older server image; `git pull` and rebuild
+  (`docker compose -f deploy/docker-compose.yml up -d --build --force-recreate`).
+  Re-running `ensureTLSCert` only regenerates the certificate if none
+  exists yet, so on an already-running server you may need to delete the
+  `tls/` folder inside its data volume once to pick up the fix — this
+  issues a new fingerprint, so grab a fresh enrollment token afterward.
 
 ## 0. Before you start
 
