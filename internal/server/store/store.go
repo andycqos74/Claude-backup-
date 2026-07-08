@@ -657,7 +657,7 @@ func (s *Store) ListSnapshots(agentID, jobID string) ([]Snapshot, error) {
 			q += ` AND ` + c
 		}
 	}
-	q += ` ORDER BY created_at DESC`
+	q += ` ORDER BY created_at DESC, rowid DESC`
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err

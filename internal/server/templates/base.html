@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Central Backup</title>
 <link rel="stylesheet" href="/static/app.css">
-<script src="/static/app.js" defer></script>
+<!-- Loaded synchronously (not deferred) so the shared helpers (api, el, …)
+     are defined before the inline page scripts at the end of each body run. -->
+<script src="/static/app.js"></script>
 </head>
 <body data-page="{{.Page}}" data-id="{{.ID}}">
 {{if and (ne .Page "login") (ne .Page "setup")}}

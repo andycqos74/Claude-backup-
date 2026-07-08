@@ -73,8 +73,8 @@ func (s *Server) deleteSnapshot(id string) error {
 }
 
 // blobGCGrace protects blobs uploaded by an in-flight backup whose manifest
-// has not been committed yet from being swept.
-const blobGCGrace = 24 * time.Hour
+// has not been committed yet from being swept (variable for tests).
+var blobGCGrace = 24 * time.Hour
 
 // gcBlobs mark-and-sweeps the blob store: everything referenced by any
 // snapshot manifest is kept; unreferenced blobs older than the grace period

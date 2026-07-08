@@ -1,0 +1,25 @@
+# Central backup server.
+#   docker compose -f deploy/docker-compose.yml up -d --build
+# Then open https://<host>:8443 and create the admin account.
+services:
+  backup-server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: server
+    image: centralbackup/server
+    container_name: backup-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      # Extra DNS names / IPs for the generated TLS certificate
+      # (set this to the public name agents will connect to).
+      CB_SERVER_NAME: ${CB_SERVER_NAME:-}
+    volumes:
+      # All state: database, TLS cert and backup storage.
+      # Mount a large disk here (or bind-mount a path for /data/storage).
+      - backup-data:/data
+
+volumes:
+  backup-data:

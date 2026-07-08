@@ -246,16 +246,20 @@ func cmdJob(args []string) {
 	case "rm":
 		fs := flag.NewFlagSet("job rm", flag.ExitOnError)
 		stateDir, config := commonFlags(fs)
-		fs.Parse(rest)
-		if fs.NArg() != 1 {
+		name, flagArgs := splitPositional(rest)
+		fs.Parse(flagArgs)
+		if name == "" && fs.NArg() == 1 {
+			name = fs.Arg(0)
+		}
+		if name == "" {
 			fmt.Fprintln(os.Stderr, "job rm: exactly one job NAME or ID required")
 			os.Exit(2)
 		}
 		path := resolveConfig(*stateDir, *config)
 		cf := mustReadConfig(path)
-		idx := findJob(cf, fs.Arg(0))
+		idx := findJob(cf, name)
 		if idx < 0 {
-			log.Fatalf("no job named or with id %q", fs.Arg(0))
+			log.Fatalf("no job named or with id %q", name)
 		}
 		j := cf.Jobs[idx]
 		cf.Jobs = append(cf.Jobs[:idx], cf.Jobs[idx+1:]...)
@@ -268,16 +272,20 @@ func cmdJob(args []string) {
 	case "enable", "disable":
 		fs := flag.NewFlagSet("job "+sub, flag.ExitOnError)
 		stateDir, config := commonFlags(fs)
-		fs.Parse(rest)
-		if fs.NArg() != 1 {
+		name, flagArgs := splitPositional(rest)
+		fs.Parse(flagArgs)
+		if name == "" && fs.NArg() == 1 {
+			name = fs.Arg(0)
+		}
+		if name == "" {
 			fmt.Fprintf(os.Stderr, "job %s: exactly one job NAME or ID required\n", sub)
 			os.Exit(2)
 		}
 		path := resolveConfig(*stateDir, *config)
 		cf := mustReadConfig(path)
-		idx := findJob(cf, fs.Arg(0))
+		idx := findJob(cf, name)
 		if idx < 0 {
-			log.Fatalf("no job named or with id %q", fs.Arg(0))
+			log.Fatalf("no job named or with id %q", name)
 		}
 		v := sub == "enable"
 		cf.Jobs[idx].Enabled = &v
@@ -287,6 +295,16 @@ func cmdJob(args []string) {
 	default:
 		usage()
 	}
+}
+
+// splitPositional pulls a leading positional argument out so flags may
+// appear before or after it (Go's flag package stops at the first
+// non-flag argument).
+func splitPositional(args []string) (positional string, flags []string) {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return args[0], args[1:]
+	}
+	return "", args
 }
 
 func findJob(cf *agent.ConfigFile, nameOrID string) int {
