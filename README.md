@@ -61,6 +61,11 @@ CB_SERVER_NAME=backup.example.com docker compose -f deploy/docker-compose.yml up
 - Remote clients must be able to reach port 8443 on this machine — that is
   the **only** port the whole system needs.
 
+Prefer not to use Docker? The server is a single static binary — run
+`sudo CB_SERVER_NAME=… scripts/install-server.sh` for a systemd install
+instead. Full step-by-step (server + clients + firewall/TLS) is in
+[docs/deployment.md](docs/deployment.md).
+
 ## Quick start — clients
 
 In the GUI: **Clients → Enroll new client**. That generates a one-time
