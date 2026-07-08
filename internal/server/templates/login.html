@@ -1,0 +1,21 @@
+{{define "content"}}
+<div class="auth-card">
+  <h1>⛁ Central Backup</h1>
+  <p class="muted">Sign in to the backup console</p>
+  <form id="login-form">
+    <label>Username <input name="username" autocomplete="username" required autofocus></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</div>
+<script>
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await api('POST', '/api/admin/login', {username: f.get('username'), password: f.get('password')});
+    location.href = '/';
+  } catch (err) { toast(err.message); }
+});
+</script>
+{{end}}

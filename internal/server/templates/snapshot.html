@@ -1,0 +1,93 @@
+{{define "content"}}
+<h1>Snapshot <span class="muted" id="snap-meta"></span></h1>
+<div class="page-head">
+  <nav class="crumbs" id="crumbs"></nav>
+  <span class="spacer"></span>
+  <button class="btn" onclick="downloadZip()">⬇ Download selection as zip</button>
+  <button class="btn primary" onclick="el('restore-dlg').showModal()">↩ Restore selection to client</button>
+</div>
+<table class="tbl" id="tree-tbl">
+  <thead><tr><th class="w1"><input type="checkbox" id="sel-all"></th><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<dialog id="restore-dlg" class="dlg">
+  <h2>Restore to client</h2>
+  <p class="muted" id="restore-what"></p>
+  <form id="restore-form">
+    <label>Target directory on client (empty = restore to original location)
+      <input name="target" placeholder="/tmp/restore or D:\restore"></label>
+    <label class="check"><input name="overwrite" type="checkbox"> Overwrite existing files</label>
+    <div class="row">
+      <button class="btn primary" type="submit">Start restore</button>
+      <button class="btn" type="button" onclick="el('restore-dlg').close()">Cancel</button>
+    </div>
+  </form>
+</dialog>
+<script>
+const snapID = document.body.dataset.id;
+let curPath = '';
+const selected = new Set();
+
+function selectionPaths() { return [...selected]; }
+
+async function loadMeta() {
+  const snaps = await api('GET', '/api/admin/snapshots');
+  const s = snaps.find(x => x.ID === snapID);
+  if (s) el('snap-meta').textContent = `· ${s.Mode} · ${fmtTime(s.CreatedAt)} · ${s.Files} files · ${fmtBytes(s.Bytes)}`;
+}
+async function loadTree(path) {
+  curPath = path;
+  const nodes = await api('GET', `/api/admin/snapshots/${snapID}/tree?path=` + encodeURIComponent(path));
+  const parts = path ? path.split('/') : [];
+  let acc = '';
+  el('crumbs').innerHTML = `<a href="#" onclick="loadTree('');return false">root</a>` +
+    parts.map(p => { acc += (acc ? '/' : '') + p; return ` / <a href="#" onclick="loadTree('${esc(acc)}');return false">${esc(p)}</a>`; }).join('');
+  fillRows('tree-tbl', nodes.map(n => [
+    `<input type="checkbox" data-path="${esc(n.path)}" ${selected.has(n.path) ? 'checked' : ''}>`,
+    n.type === 'd'
+      ? `📁 <a href="#" onclick="loadTree('${esc(n.path)}');return false">${esc(n.name)}</a>`
+      : (n.type === 'l' ? '🔗 ' : '📄 ') + esc(n.name),
+    n.type === 'f' ? fmtBytes(n.size) : '',
+    n.mtime ? fmtTime(n.mtime) : '',
+    n.type === 'f'
+      ? `<a class="btn sm" href="/api/admin/snapshots/${snapID}/download?path=${encodeURIComponent(n.path)}">Download</a>`
+      : '',
+  ]), 'Empty directory.');
+  document.querySelectorAll('#tree-tbl input[type=checkbox][data-path]').forEach(cb => {
+    cb.addEventListener('change', () => cb.checked ? selected.add(cb.dataset.path) : selected.delete(cb.dataset.path));
+  });
+}
+el('sel-all').addEventListener('change', (e) => {
+  document.querySelectorAll('#tree-tbl input[type=checkbox][data-path]').forEach(cb => {
+    cb.checked = e.target.checked;
+    cb.checked ? selected.add(cb.dataset.path) : selected.delete(cb.dataset.path);
+  });
+});
+function downloadZip() {
+  const paths = selectionPaths();
+  const q = paths.length ? '&paths=' + encodeURIComponent(paths.join('\x00')) : '';
+  location.href = `/api/admin/snapshots/${snapID}/download?zip=1` + q;
+}
+document.getElementById('restore-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    const res = await api('POST', `/api/admin/snapshots/${snapID}/restore`, {
+      paths: selectionPaths(), target_dir: f.target.value.trim(), overwrite: f.overwrite.checked,
+    });
+    el('restore-dlg').close();
+    location.href = '/runs/' + res.run_id;
+  } catch (err) { toast(err.message); }
+});
+el('restore-dlg').addEventListener('close', () => {});
+document.querySelector('#restore-dlg').addEventListener('cancel', () => {});
+el('restore-what').textContent = '';
+document.querySelector('button.primary[onclick*="restore-dlg"]').addEventListener('click', () => {
+  const n = selectionPaths().length;
+  el('restore-what').textContent = n ? `Restoring ${n} selected item(s).` : 'Nothing selected — the whole snapshot will be restored.';
+});
+loadMeta();
+loadTree('');
+</script>
+{{end}}

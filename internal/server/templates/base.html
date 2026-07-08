@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Central Backup</title>
+<link rel="stylesheet" href="/static/app.css">
+<!-- Loaded synchronously (not deferred) so the shared helpers (api, el, …)
+     are defined before the inline page scripts at the end of each body run. -->
+<script src="/static/app.js"></script>
+</head>
+<body data-page="{{.Page}}" data-id="{{.ID}}">
+{{if and (ne .Page "login") (ne .Page "setup")}}
+<nav class="topnav">
+  <a class="brand" href="/">⛁ Central Backup</a>
+  <a href="/" {{if eq .Page "dashboard"}}class="active"{{end}}>Dashboard</a>
+  <a href="/clients" {{if or (eq .Page "clients") (eq .Page "client")}}class="active"{{end}}>Clients</a>
+  <a href="/settings" {{if eq .Page "settings"}}class="active"{{end}}>Settings</a>
+  <span class="spacer"></span>
+  <button class="btn ghost" onclick="logout()">Sign out</button>
+</nav>
+{{end}}
+<main class="container">
+{{block "content" .}}{{end}}
+</main>
+<div id="toast"></div>
+</body>
+</html>

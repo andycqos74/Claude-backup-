@@ -1,0 +1,33 @@
+# Containerized backup agent for Docker hosts.
+#
+# Build the image once (on the host or push it to your registry):
+#   docker compose -f deploy/agent-docker-compose.yml build
+# First start (enrolls using the token from the server GUI):
+#   CB_SERVER=https://backup.example.com:8443 CB_TOKEN=... CB_FINGERPRINT=... \
+#     docker compose -f deploy/agent-docker-compose.yml up -d
+#
+# The host filesystem is visible read-only under /host — create jobs with
+# paths like /host/var/lib/docker/volumes/myvol/_data or /host/srv/app.
+# The docker socket is mounted so pre-hooks can quiesce databases, e.g.:
+#   pre_hook: docker exec mydb pg_dump -U app app > /host-backup/db.sql
+services:
+  backup-agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: agent
+    image: centralbackup/agent
+    container_name: backup-agent
+    restart: unless-stopped
+    environment:
+      CB_SERVER: ${CB_SERVER:-}
+      CB_TOKEN: ${CB_TOKEN:-}
+      CB_FINGERPRINT: ${CB_FINGERPRINT:-}
+      CB_NAME: ${CB_NAME:-}
+    volumes:
+      - backup-agent-data:/var/lib/backup-agent
+      - /:/host:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  backup-agent-data:

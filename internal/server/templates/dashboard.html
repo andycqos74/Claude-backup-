@@ -1,0 +1,44 @@
+{{define "content"}}
+<h1>Dashboard</h1>
+<div class="cards" id="stat-cards">
+  <div class="card"><div class="stat" id="stat-agents">–</div><div class="muted">clients online</div></div>
+  <div class="card"><div class="stat" id="stat-snapshots">–</div><div class="muted">snapshots</div></div>
+  <div class="card"><div class="stat" id="stat-stored">–</div><div class="muted">stored (compressed)</div></div>
+  <div class="card"><div class="stat" id="stat-raw">–</div><div class="muted">protected data</div></div>
+</div>
+
+<h2>Clients</h2>
+<table class="tbl" id="agents-tbl">
+  <thead><tr><th>Status</th><th>Name</th><th>Host</th><th>OS</th><th>Last seen</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>Recent runs</h2>
+<table class="tbl" id="runs-tbl">
+  <thead><tr><th>Status</th><th>Job</th><th>Client</th><th>Mode</th><th>Started</th><th>Duration</th></tr></thead>
+  <tbody></tbody>
+</table>
+<script>
+async function load() {
+  const d = await api('GET', '/api/admin/overview');
+  const online = d.agents.filter(a => a.online).length;
+  el('stat-agents').textContent = online + ' / ' + d.agents.length;
+  el('stat-snapshots').textContent = d.stats.Snapshots;
+  el('stat-stored').textContent = fmtBytes(d.stats.SizeStored);
+  el('stat-raw').textContent = fmtBytes(d.stats.SizeRaw);
+
+  fillRows('agents-tbl', d.agents.map(a => [
+    statusDot(a.online ? 'online' : 'offline'),
+    `<a href="/clients/${a.ID}">${esc(a.Name)}</a>`,
+    esc(a.Hostname), esc(a.OS + '/' + a.Arch), fmtTime(a.LastSeen),
+  ]));
+  fillRows('runs-tbl', d.runs.map(r => [
+    statusBadge(r.Status),
+    `<a href="/runs/${r.ID}">${esc(r.job_name)}</a>`,
+    esc(r.agent_name), esc(r.Mode), fmtTime(r.CreatedAt), fmtDuration(r),
+  ]));
+}
+load();
+setInterval(load, 5000);
+</script>
+{{end}}

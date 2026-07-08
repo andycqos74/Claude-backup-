@@ -1,0 +1,60 @@
+{{define "content"}}
+<div class="page-head">
+  <h1>Clients</h1>
+  <button class="btn primary" onclick="newToken()">＋ Enroll new client</button>
+</div>
+<table class="tbl" id="agents-tbl">
+  <thead><tr><th>Status</th><th>Name</th><th>Host</th><th>OS</th><th>Agent version</th><th>Last seen</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<dialog id="token-dlg" class="dlg">
+  <h2>Enroll a new client</h2>
+  <p>Run this on the client within <b>24 hours</b> (one-time token):</p>
+  <h3>Ubuntu / Linux</h3>
+  <pre id="cmd-linux" class="code"></pre>
+  <h3>Windows Server / Windows 11 (PowerShell as Administrator)</h3>
+  <pre id="cmd-win" class="code"></pre>
+  <h3>Docker host (containerized agent)</h3>
+  <pre id="cmd-docker" class="code"></pre>
+  <p class="muted">Expected TLS fingerprint: <code id="token-fp"></code></p>
+  <button class="btn" onclick="el('token-dlg').close()">Close</button>
+</dialog>
+<script>
+async function load() {
+  const agents = await api('GET', '/api/admin/agents');
+  fillRows('agents-tbl', agents.map(a => [
+    statusDot(a.online ? 'online' : 'offline'),
+    `<a href="/clients/${a.ID}">${esc(a.Name)}</a>`,
+    esc(a.Hostname), esc(a.OS + '/' + a.Arch), esc(a.Version), fmtTime(a.LastSeen),
+  ]), 'No clients enrolled yet — click “Enroll new client”.');
+}
+async function newToken() {
+  const t = await api('POST', '/api/admin/tokens', {note: ''});
+  const base = location.origin;
+  el('cmd-linux').textContent =
+    `curl -fsSLk ${base}/static/install-agent.sh | sudo bash -s -- --server ${base} --token ${t.token} --fingerprint ${t.fingerprint}`;
+  // Works on both Windows PowerShell 5.1 and PowerShell 7+: 5.1 honours the
+  // ServicePointManager callback, 7+ uses -SkipCertificateCheck. Needed only
+  // to fetch the script over the self-signed cert; enrollment then pins the
+  // fingerprint.
+  el('cmd-win').textContent =
+    `if($PSVersionTable.PSVersion.Major -ge 6){$PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']=$true}` +
+    `else{[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}}; ` +
+    `[Net.ServicePointManager]::SecurityProtocol='Tls12'; ` +
+    `iwr ${base}/static/install-agent.ps1 -UseBasicParsing -OutFile $env:TEMP\\install-agent.ps1; ` +
+    `& $env:TEMP\\install-agent.ps1 -Server ${base} -Token ${t.token} -Fingerprint ${t.fingerprint}`;
+  el('cmd-docker').textContent =
+    `# build the agent image once from this repo, then:
+docker run -d --name backup-agent --restart unless-stopped \\
+  -v backup-agent-data:/var/lib/backup-agent \\
+  -v /:/host:ro -v /var/run/docker.sock:/var/run/docker.sock \\
+  -e CB_SERVER=${base} -e CB_TOKEN=${t.token} -e CB_FINGERPRINT=${t.fingerprint} \\
+  centralbackup/agent`;
+  el('token-fp').textContent = t.fingerprint;
+  el('token-dlg').showModal();
+}
+load();
+setInterval(load, 5000);
+</script>
+{{end}}

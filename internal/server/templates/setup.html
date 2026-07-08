@@ -1,0 +1,21 @@
+{{define "content"}}
+<div class="auth-card">
+  <h1>⛁ Central Backup</h1>
+  <p class="muted">First run — create the administrator account</p>
+  <form id="setup-form">
+    <label>Username <input name="username" autocomplete="username" required autofocus></label>
+    <label>Password (min 8 characters) <input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+    <button class="btn primary" type="submit">Create account</button>
+  </form>
+</div>
+<script>
+document.getElementById('setup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await api('POST', '/api/admin/setup', {username: f.get('username'), password: f.get('password')});
+    location.href = '/';
+  } catch (err) { toast(err.message); }
+});
+</script>
+{{end}}

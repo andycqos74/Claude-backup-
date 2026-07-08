@@ -1,0 +1,98 @@
+{{define "content"}}
+<div class="page-head">
+  <h1 id="agent-name">Client</h1>
+  <span id="agent-status"></span>
+  <span class="spacer"></span>
+  <button class="btn" onclick="renameAgent()">Rename</button>
+  <button class="btn danger" onclick="removeAgent()">Delete client</button>
+</div>
+<p class="muted" id="agent-meta"></p>
+
+<div class="page-head">
+  <h2>Backup jobs</h2>
+  <a class="btn primary" id="new-job-link" href="#">＋ New job</a>
+</div>
+<p class="muted">Jobs can also be managed on the client itself via <code>backup-agent job</code> or by editing <code>agent.yaml</code> — changes sync both ways.</p>
+<table class="tbl" id="jobs-tbl">
+  <thead><tr><th>Job</th><th>Paths</th><th>Schedule</th><th>Origin</th><th>Enabled</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>Snapshots</h2>
+<table class="tbl" id="snaps-tbl">
+  <thead><tr><th>Created</th><th>Job</th><th>Mode</th><th>Files</th><th>Size</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<h2>Recent runs</h2>
+<table class="tbl" id="runs-tbl">
+  <thead><tr><th>Status</th><th>Job</th><th>Mode</th><th>Started</th><th>Duration</th><th>Error</th></tr></thead>
+  <tbody></tbody>
+</table>
+<script>
+const agentID = document.body.dataset.id;
+el('new-job-link').href = '/jobs/new?agent=' + agentID;
+let jobNames = {};
+
+async function load() {
+  const agents = await api('GET', '/api/admin/agents');
+  const a = agents.find(x => x.ID === agentID);
+  if (!a) { toast('client not found'); return; }
+  el('agent-name').textContent = a.Name;
+  el('agent-status').innerHTML = statusDot(a.online ? 'online' : 'offline') + (a.online ? ' online' : ' offline');
+  el('agent-meta').textContent =
+    `${a.Hostname} · ${a.OS}/${a.Arch} · agent ${a.Version || '?'} · last seen ${fmtTime(a.LastSeen)} · id ${a.ID}`;
+
+  const jobs = await api('GET', '/api/admin/jobs?agent=' + agentID);
+  jobNames = Object.fromEntries(jobs.map(j => [j.id, j.name]));
+  fillRows('jobs-tbl', jobs.map(j => [
+    `<a href="/jobs/${j.id}">${esc(j.name)}</a>`,
+    esc(j.paths.join(', ')),
+    j.schedule ? esc(j.schedule) + (j.full_every ? ` <span class="muted">(full every ${j.full_every})</span>` : '') : '<span class="muted">manual</span>',
+    esc(j.origin), j.enabled ? '✓' : '—',
+    `<button class="btn sm" onclick="runJob('${j.id}','incremental')">Back up now</button>
+     <button class="btn sm" onclick="runJob('${j.id}','full')">Full</button>`,
+  ]), 'No jobs yet.');
+
+  const snaps = await api('GET', '/api/admin/snapshots?agent=' + agentID);
+  fillRows('snaps-tbl', snaps.map(s => [
+    fmtTime(s.CreatedAt),
+    esc(jobNames[s.JobID] || s.JobID), esc(s.Mode), s.Files, fmtBytes(s.Bytes),
+    `<a class="btn sm" href="/snapshots/${s.ID}">Browse / restore</a>
+     <button class="btn sm danger" onclick="delSnap('${s.ID}')">Delete</button>`,
+  ]), 'No snapshots yet.');
+
+  const runs = await api('GET', '/api/admin/runs?agent=' + agentID);
+  fillRows('runs-tbl', runs.map(r => [
+    statusBadge(r.Status),
+    `<a href="/runs/${r.ID}">${esc(r.job_name)}</a>`,
+    esc(r.Mode), fmtTime(r.CreatedAt), fmtDuration(r), esc(r.Error || ''),
+  ]), 'No runs yet.');
+}
+async function runJob(id, mode) {
+  try {
+    const res = await api('POST', `/api/admin/jobs/${id}/run`, {mode, queue: true});
+    toast(res.queued ? 'Client offline — run queued for reconnect' : 'Backup started');
+    load();
+  } catch (err) { toast(err.message); }
+}
+async function delSnap(id) {
+  if (!confirm('Delete this snapshot? Its data is removed at the next cleanup.')) return;
+  await api('DELETE', `/api/admin/snapshots/${id}`);
+  load();
+}
+async function renameAgent() {
+  const name = prompt('New client name:');
+  if (!name) return;
+  await api('POST', `/api/admin/agents/${agentID}/rename`, {name});
+  load();
+}
+async function removeAgent() {
+  if (!confirm('Delete this client, all its jobs and ALL its snapshots? This cannot be undone.')) return;
+  await api('DELETE', `/api/admin/agents/${agentID}`);
+  location.href = '/clients';
+}
+load();
+setInterval(load, 5000);
+</script>
+{{end}}
