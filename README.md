@@ -22,7 +22,8 @@ compressed and deduplicated, stored on the server's local storage.
 ## Features
 
 - **Web GUI** for everything: enroll clients, define jobs, schedules,
-  watch progress live, browse snapshots, restore or download files.
+  watch progress live, cancel a run in progress, browse snapshots, restore
+  or download files.
 - **Jobs configurable from both sides** — edit in the GUI *or* on the
   client (`backup-agent job add …` / edit `agent.yaml`); changes sync both
   ways automatically (last write wins).

@@ -35,6 +35,7 @@ const (
 	MsgJobsUpdate = "jobs_update"
 	MsgRunBackup  = "run_backup"
 	MsgRestore    = "restore"
+	MsgCancelRun  = "cancel_run"
 )
 
 // Run modes.
@@ -46,11 +47,12 @@ const (
 
 // Run statuses.
 const (
-	RunQueued  = "queued"
-	RunRunning = "running"
-	RunSuccess = "success"
-	RunPartial = "partial" // finished but some files were skipped
-	RunError   = "error"
+	RunQueued    = "queued"
+	RunRunning   = "running"
+	RunSuccess   = "success"
+	RunPartial   = "partial" // finished but some files were skipped
+	RunError     = "error"
+	RunCancelled = "cancelled"
 )
 
 // Job origins.
@@ -122,6 +124,13 @@ type Restore struct {
 	Overwrite  bool     `json:"overwrite"`
 }
 
+// CancelRun asks the agent to stop an in-progress run (backup or restore).
+// The agent finishes cleanly with RunDone{Status: RunCancelled} rather than
+// dropping the connection or leaving a half-committed snapshot.
+type CancelRun struct {
+	RunID string `json:"run_id"`
+}
+
 // RunProgress is streamed while a run is in flight.
 type RunProgress struct {
 	RunID      string `json:"run_id"`
@@ -152,7 +161,7 @@ type RunStats struct {
 // RunDone finalises a run.
 type RunDone struct {
 	RunID      string   `json:"run_id"`
-	Status     string   `json:"status"` // success | partial | error
+	Status     string   `json:"status"` // success | partial | error | cancelled
 	SnapshotID string   `json:"snapshot_id,omitempty"`
 	Stats      RunStats `json:"stats"`
 	Error      string   `json:"error,omitempty"`

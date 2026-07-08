@@ -26,7 +26,7 @@
 
 <h2>Recent runs</h2>
 <table class="tbl" id="runs-tbl">
-  <thead><tr><th>Status</th><th>Job</th><th>Mode</th><th>Started</th><th>Duration</th><th>Error</th></tr></thead>
+  <thead><tr><th>Status</th><th>Job</th><th>Mode</th><th>Started</th><th>Duration</th><th>Error</th><th></th></tr></thead>
   <tbody></tbody>
 </table>
 <script>
@@ -67,6 +67,8 @@ async function load() {
     statusBadge(r.Status),
     `<a href="/runs/${r.ID}">${esc(r.job_name)}</a>`,
     esc(r.Mode), fmtTime(r.CreatedAt), fmtDuration(r), esc(r.Error || ''),
+    (r.Status === 'running' || r.Status === 'queued')
+      ? `<button class="btn sm danger" onclick="cancelRun('${r.ID}')">Cancel</button>` : '',
   ]), 'No runs yet.');
 }
 async function runJob(id, mode) {
@@ -74,6 +76,15 @@ async function runJob(id, mode) {
     const res = await api('POST', `/api/admin/jobs/${id}/run`, {mode, queue: true});
     toast(res.queued ? 'Client offline — run queued for reconnect' : 'Backup started');
     load();
+  } catch (err) { toast(err.message); }
+}
+async function cancelRun(id) {
+  if (!confirm('Cancel this run? A backup in progress stops without creating a snapshot.')) return;
+  try {
+    await api('POST', `/api/admin/runs/${id}/cancel`);
+    toast('Cancellation requested');
+    // The run only actually stops once the agent reports back; the
+    // existing 5s auto-refresh picks that up without racing it here.
   } catch (err) { toast(err.message); }
 }
 async function delSnap(id) {

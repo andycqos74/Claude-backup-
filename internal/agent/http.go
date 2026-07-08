@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,12 +31,13 @@ func newServerClient(creds *Credentials) *serverClient {
 				TLSClientConfig: pinnedTLSConfig(creds.Fingerprint),
 			},
 			// No overall timeout: blob uploads/downloads can be large.
+			// Cancellation (e.g. a run being stopped) goes through ctx.
 		},
 	}
 }
 
-func (c *serverClient) do(method, path string, body io.Reader, contentType string) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.base+path, body)
+func (c *serverClient) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +64,7 @@ func (c *serverClient) do(method, path string, body io.Reader, contentType strin
 	return res, nil
 }
 
-func (c *serverClient) doJSON(method, path string, reqBody, respBody any) error {
+func (c *serverClient) doJSON(ctx context.Context, method, path string, reqBody, respBody any) error {
 	var r io.Reader
 	if reqBody != nil {
 		b, err := json.Marshal(reqBody)
@@ -71,7 +73,7 @@ func (c *serverClient) doJSON(method, path string, reqBody, respBody any) error 
 		}
 		r = bytes.NewReader(b)
 	}
-	res, err := c.do(method, path, r, "application/json")
+	res, err := c.do(ctx, method, path, r, "application/json")
 	if err != nil {
 		return err
 	}
@@ -90,7 +92,7 @@ func Enroll(serverURL, fingerprint, token, name string) (*Credentials, error) {
 	creds := &Credentials{ServerURL: serverURL, Fingerprint: fingerprint}
 	c := newServerClient(creds)
 	var resp proto.EnrollResponse
-	err := c.doJSON("POST", "/api/agent/enroll", proto.EnrollRequest{
+	err := c.doJSON(context.Background(), "POST", "/api/agent/enroll", proto.EnrollRequest{
 		Token: token, Name: name, Hostname: hostname,
 		OS: runtime.GOOS, Arch: runtime.GOARCH,
 	}, &resp)
@@ -102,17 +104,17 @@ func Enroll(serverURL, fingerprint, token, name string) (*Credentials, error) {
 	return creds, nil
 }
 
-func (c *serverClient) checkBlobs(hashes []string) (missing []string, err error) {
+func (c *serverClient) checkBlobs(ctx context.Context, hashes []string) (missing []string, err error) {
 	var resp proto.BlobCheckResponse
-	if err := c.doJSON("POST", "/api/agent/blobs/check", proto.BlobCheckRequest{Hashes: hashes}, &resp); err != nil {
+	if err := c.doJSON(ctx, "POST", "/api/agent/blobs/check", proto.BlobCheckRequest{Hashes: hashes}, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Missing, nil
 }
 
 // putBlob uploads one zstd-compressed blob stream.
-func (c *serverClient) putBlob(hash string, compressed io.Reader) error {
-	res, err := c.do("PUT", "/api/agent/blobs/"+hash, compressed, "application/zstd")
+func (c *serverClient) putBlob(ctx context.Context, hash string, compressed io.Reader) error {
+	res, err := c.do(ctx, "PUT", "/api/agent/blobs/"+hash, compressed, "application/zstd")
 	if err != nil {
 		return err
 	}
@@ -121,8 +123,8 @@ func (c *serverClient) putBlob(hash string, compressed io.Reader) error {
 }
 
 // getBlob returns the zstd-compressed blob stream (caller closes).
-func (c *serverClient) getBlob(hash string) (io.ReadCloser, error) {
-	res, err := c.do("GET", "/api/agent/blobs/"+hash, nil, "")
+func (c *serverClient) getBlob(ctx context.Context, hash string) (io.ReadCloser, error) {
+	res, err := c.do(ctx, "GET", "/api/agent/blobs/"+hash, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +132,8 @@ func (c *serverClient) getBlob(hash string) (io.ReadCloser, error) {
 }
 
 // getManifest returns the zstd-compressed manifest stream (caller closes).
-func (c *serverClient) getManifest(snapshotID string) (io.ReadCloser, error) {
-	res, err := c.do("GET", "/api/agent/manifests/"+snapshotID, nil, "")
+func (c *serverClient) getManifest(ctx context.Context, snapshotID string) (io.ReadCloser, error) {
+	res, err := c.do(ctx, "GET", "/api/agent/manifests/"+snapshotID, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -140,10 +142,10 @@ func (c *serverClient) getManifest(snapshotID string) (io.ReadCloser, error) {
 
 // commitSnapshot uploads the zstd-compressed JSONL manifest and records the
 // snapshot server-side.
-func (c *serverClient) commitSnapshot(jobID, runID, mode string, files, bytesTotal int64, manifest io.Reader) (string, error) {
+func (c *serverClient) commitSnapshot(ctx context.Context, jobID, runID, mode string, files, bytesTotal int64, manifest io.Reader) (string, error) {
 	path := fmt.Sprintf("/api/agent/snapshots?job_id=%s&run_id=%s&mode=%s&files=%d&bytes=%d",
 		jobID, runID, mode, files, bytesTotal)
-	res, err := c.do("POST", path, manifest, "application/zstd")
+	res, err := c.do(ctx, "POST", path, manifest, "application/zstd")
 	if err != nil {
 		return "", err
 	}

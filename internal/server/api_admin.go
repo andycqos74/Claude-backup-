@@ -66,6 +66,7 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/jobs/{id}/run", s.adminAuth(s.handleJobRun))
 	mux.HandleFunc("GET /api/admin/runs", s.adminAuth(s.handleRunsList))
 	mux.HandleFunc("GET /api/admin/runs/{id}", s.adminAuth(s.handleRunGet))
+	mux.HandleFunc("POST /api/admin/runs/{id}/cancel", s.adminAuth(s.handleRunCancel))
 	mux.HandleFunc("GET /api/admin/snapshots", s.adminAuth(s.handleSnapshotsList))
 	mux.HandleFunc("GET /api/admin/snapshots/{id}/tree", s.adminAuth(s.handleSnapshotTree))
 	mux.HandleFunc("POST /api/admin/snapshots/{id}/restore", s.adminAuth(s.handleSnapshotRestore))
@@ -380,6 +381,14 @@ func (s *Server) handleRunGet(w http.ResponseWriter, r *http.Request) {
 		"run":  s.runsJSON([]store.Run{*run})[0],
 		"logs": logs,
 	})
+}
+
+func (s *Server) handleRunCancel(w http.ResponseWriter, r *http.Request) {
+	if err := s.cancelRun(r.PathValue("id")); err != nil {
+		httpError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // ---- snapshots ----

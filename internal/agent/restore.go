@@ -2,9 +2,11 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,12 +24,18 @@ func (a *Agent) runRestore(cmd proto.Restore) {
 	a.runs.Lock()
 	defer a.runs.Unlock()
 
+	ctx := a.beginRun(cmd.RunID)
+	defer a.endRun(cmd.RunID)
+
 	start := time.Now()
-	stats, err := a.doRestore(cmd)
+	stats, err := a.doRestore(ctx, cmd)
 	stats.DurationMS = time.Since(start).Milliseconds()
 
 	done := proto.RunDone{RunID: cmd.RunID, Stats: stats}
 	switch {
+	case errors.Is(err, context.Canceled):
+		done.Status = proto.RunCancelled
+		a.runLog(cmd.RunID, "info", "restore cancelled")
 	case err != nil:
 		done.Status = proto.RunError
 		done.Error = err.Error()
@@ -39,7 +47,7 @@ func (a *Agent) runRestore(cmd proto.Restore) {
 	a.runDone(done)
 }
 
-func (a *Agent) doRestore(cmd proto.Restore) (proto.RunStats, error) {
+func (a *Agent) doRestore(ctx context.Context, cmd proto.Restore) (proto.RunStats, error) {
 	var stats proto.RunStats
 	where := "original locations"
 	if cmd.TargetDir != "" {
@@ -47,7 +55,7 @@ func (a *Agent) doRestore(cmd proto.Restore) (proto.RunStats, error) {
 	}
 	a.runLog(cmd.RunID, "info", fmt.Sprintf("restoring snapshot %s to %s", cmd.SnapshotID, where))
 
-	rc, err := a.client.getManifest(cmd.SnapshotID)
+	rc, err := a.client.getManifest(ctx, cmd.SnapshotID)
 	if err != nil {
 		return stats, fmt.Errorf("fetch manifest: %w", err)
 	}
@@ -87,6 +95,10 @@ func (a *Agent) doRestore(cmd proto.Restore) (proto.RunStats, error) {
 	progress := a.newProgressReporter(cmd.RunID, "restoring")
 	var done, doneBytes int64
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			a.runLog(cmd.RunID, "info", fmt.Sprintf("cancelled after %d of %d files", done, len(entries)))
+			return stats, ctx.Err()
+		}
 		target, err := restoreTarget(e.Path, cmd.TargetDir)
 		if err != nil {
 			a.runLog(cmd.RunID, "warn", e.Path+": "+err.Error())
@@ -114,8 +126,12 @@ func (a *Agent) doRestore(cmd proto.Restore) (proto.RunStats, error) {
 				stats.FilesSkipped++
 			}
 		case "f":
-			n, err := a.restoreFile(e, target, cmd.Overwrite)
+			n, err := a.restoreFile(ctx, e, target, cmd.Overwrite)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					a.runLog(cmd.RunID, "info", fmt.Sprintf("cancelled after %d of %d files", done, len(entries)))
+					return stats, err
+				}
 				a.runLog(cmd.RunID, "warn", target+": "+err.Error())
 				stats.FilesSkipped++
 				continue
@@ -138,14 +154,14 @@ func (a *Agent) doRestore(cmd proto.Restore) (proto.RunStats, error) {
 
 // restoreFile downloads a blob, verifies its hash and writes it to target
 // atomically. Returns -1 when skipped because the file exists.
-func (a *Agent) restoreFile(e proto.ManifestEntry, target string, overwrite bool) (int64, error) {
+func (a *Agent) restoreFile(ctx context.Context, e proto.ManifestEntry, target string, overwrite bool) (int64, error) {
 	if _, err := os.Lstat(target); err == nil && !overwrite {
 		return -1, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return 0, err
 	}
-	rc, err := a.client.getBlob(e.Hash)
+	rc, err := a.client.getBlob(ctx, e.Hash)
 	if err != nil {
 		return 0, err
 	}

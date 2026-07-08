@@ -188,6 +188,29 @@ func (s *Server) startRestore(sn *store.Snapshot, paths []string, targetDir stri
 	return runID, nil
 }
 
+// cancelRun stops an in-progress or queued run. A queued run (agent
+// offline, nothing actually executing yet) is cancelled immediately
+// server-side; a running one is cancelled by asking the agent, which
+// reports back RunDone{Status: RunCancelled} once it stops — this function
+// does not mark it finished itself, to avoid racing the agent's own report.
+func (s *Server) cancelRun(runID string) error {
+	run, err := s.store.GetRun(runID)
+	if err != nil {
+		return err
+	}
+	switch run.Status {
+	case proto.RunQueued:
+		return s.store.FinishRun(run.ID, proto.RunCancelled, "", "cancelled before it started", proto.RunStats{})
+	case proto.RunRunning:
+		if !s.hub.Send(run.AgentID, proto.MsgCancelRun, proto.CancelRun{RunID: run.ID}) {
+			return fmt.Errorf("client is offline; cannot reach it to cancel (it will be marked failed if it doesn't reconnect)")
+		}
+		return nil
+	default:
+		return fmt.Errorf("run is not in progress")
+	}
+}
+
 // dispatchPendingWork runs when an agent (re)connects: sends queued runs
 // and fires catch-up backups for schedules missed while offline.
 func (s *Server) dispatchPendingWork(agentID string) {

@@ -14,8 +14,7 @@ Planned enhancements, roughly in priority order.
 4. **Bandwidth limits & windows** — per-agent upload throttling and
    allowed backup windows.
 5. **Notifications** — email/webhook on failed or missed runs.
-6. **Run cancellation** and richer live progress in the GUI.
-7. **Chunk-based deduplication** — content-defined chunking for large
+6. **Chunk-based deduplication** — content-defined chunking for large
    frequently-modified files (VM images, mailbox files) so only changed
    chunks upload; the current file-level model stays for everything else.
-8. **Multi-admin / roles** and audit log.
+7. **Multi-admin / roles** and audit log.

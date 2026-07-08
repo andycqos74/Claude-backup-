@@ -2,9 +2,11 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -33,12 +35,18 @@ func (a *Agent) runBackup(cmd proto.RunBackup) {
 	a.runs.Lock()
 	defer a.runs.Unlock()
 
+	ctx := a.beginRun(cmd.RunID)
+	defer a.endRun(cmd.RunID)
+
 	start := time.Now()
-	stats, snapshotID, err := a.doBackup(cmd)
+	stats, snapshotID, err := a.doBackup(ctx, cmd)
 	stats.DurationMS = time.Since(start).Milliseconds()
 
 	done := proto.RunDone{RunID: cmd.RunID, SnapshotID: snapshotID, Stats: stats}
 	switch {
+	case errors.Is(err, context.Canceled):
+		done.Status = proto.RunCancelled
+		a.runLog(cmd.RunID, "info", "backup cancelled; no snapshot was created")
 	case err != nil:
 		done.Status = proto.RunError
 		done.Error = err.Error()
@@ -55,7 +63,7 @@ type scanResult struct {
 	stats   proto.RunStats
 }
 
-func (a *Agent) doBackup(cmd proto.RunBackup) (proto.RunStats, string, error) {
+func (a *Agent) doBackup(ctx context.Context, cmd proto.RunBackup) (proto.RunStats, string, error) {
 	job := cmd.Job
 	var stats proto.RunStats
 	a.runLog(cmd.RunID, "info", fmt.Sprintf("starting %s backup of job %q", cmd.Mode, job.Name))
@@ -80,20 +88,30 @@ func (a *Agent) doBackup(cmd proto.RunBackup) (proto.RunStats, string, error) {
 	// Previous manifest gives the size+mtime shortcut for incrementals.
 	var prev map[string]proto.ManifestEntry
 	if cmd.Mode == proto.ModeIncremental {
-		prev = a.loadPrevManifest(job.ID, cmd.PrevSnapshotID)
+		prev = a.loadPrevManifest(ctx, job.ID, cmd.PrevSnapshotID)
 	}
 
-	res, err := a.scan(cmd, prev)
+	res, err := a.scan(ctx, cmd, prev)
 	if err != nil {
 		return stats, "", err
 	}
 	stats = res.stats
-
-	if err := a.uploadMissing(cmd, res, &stats); err != nil {
+	// scan() stops early on cancellation without returning an error (it
+	// just has an incomplete result), so check explicitly here.
+	if err := ctx.Err(); err != nil {
 		return stats, "", err
 	}
 
-	snapshotID, err := a.commitManifest(cmd, res)
+	if err := a.uploadMissing(ctx, cmd, res, &stats); err != nil {
+		return stats, "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return stats, "", err
+	}
+
+	// A cancelled run commits no snapshot: partial data is never presented
+	// as a restorable backup.
+	snapshotID, err := a.commitManifest(ctx, cmd, res)
 	if err != nil {
 		return stats, "", err
 	}
@@ -104,13 +122,18 @@ func (a *Agent) doBackup(cmd proto.RunBackup) (proto.RunStats, string, error) {
 }
 
 // scan walks all job paths, reusing hashes from prev for files whose
-// size+mtime are unchanged and hashing the rest.
-func (a *Agent) scan(cmd proto.RunBackup, prev map[string]proto.ManifestEntry) (*scanResult, error) {
+// size+mtime are unchanged and hashing the rest. On cancellation it returns
+// early with whatever was collected so far and a nil error; callers must
+// check ctx.Err() themselves to detect that case.
+func (a *Agent) scan(ctx context.Context, cmd proto.RunBackup, prev map[string]proto.ManifestEntry) (*scanResult, error) {
 	res := &scanResult{}
 	progress := a.newProgressReporter(cmd.RunID, "scanning")
 	var toHash []int // indices into res.entries
 
 	for _, root := range cmd.Job.Paths {
+		if ctx.Err() != nil {
+			break
+		}
 		root = filepath.Clean(root)
 		rootInfo, err := os.Lstat(root)
 		if err != nil {
@@ -119,6 +142,9 @@ func (a *Agent) scan(cmd proto.RunBackup, prev map[string]proto.ManifestEntry) (
 			continue
 		}
 		walk := func(path string, d fs.DirEntry, walkErr error) error {
+			if ctx.Err() != nil {
+				return filepath.SkipAll
+			}
 			if walkErr != nil {
 				a.runLog(cmd.RunID, "warn", fmt.Sprintf("%s: %v", path, walkErr))
 				res.stats.FilesSkipped++
@@ -189,6 +215,9 @@ func (a *Agent) scan(cmd proto.RunBackup, prev map[string]proto.ManifestEntry) (
 	kept := res.entries[:0]
 	drop := map[int]bool{}
 	for _, idx := range toHash {
+		if ctx.Err() != nil {
+			break
+		}
 		e := &res.entries[idx]
 		hash, err := hashFile(fromSlash(e.Path))
 		if err != nil {
@@ -219,7 +248,7 @@ func (a *Agent) scan(cmd proto.RunBackup, prev map[string]proto.ManifestEntry) (
 // those blobs (zstd-compressed). Files that vanish or change mid-upload are
 // re-hashed once; entries that still can't be made consistent are dropped
 // so the manifest never references data the server doesn't hold.
-func (a *Agent) uploadMissing(cmd proto.RunBackup, res *scanResult, stats *proto.RunStats) error {
+func (a *Agent) uploadMissing(ctx context.Context, cmd proto.RunBackup, res *scanResult, stats *proto.RunStats) error {
 	byHash := map[string]int{} // hash -> representative entry index
 	for i, e := range res.entries {
 		if e.Type == "f" && e.Hash != "" {
@@ -228,7 +257,7 @@ func (a *Agent) uploadMissing(cmd proto.RunBackup, res *scanResult, stats *proto
 			}
 		}
 	}
-	missing, err := a.checkAllBlobs(keys(byHash))
+	missing, err := a.checkAllBlobs(ctx, keys(byHash))
 	if err != nil {
 		return err
 	}
@@ -244,14 +273,22 @@ func (a *Agent) uploadMissing(cmd proto.RunBackup, res *scanResult, stats *proto
 	var firstErr error
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
+uploadLoop:
 	for _, h := range missing {
+		if ctx.Err() != nil {
+			break
+		}
 		idx := byHash[h]
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break uploadLoop
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(hash string, idx int) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			n, newHash, err := a.uploadFile(fromSlash(res.entries[idx].Path), hash)
+			n, newHash, err := a.uploadFile(ctx, fromSlash(res.entries[idx].Path), hash)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -275,6 +312,9 @@ func (a *Agent) uploadMissing(cmd proto.RunBackup, res *scanResult, stats *proto
 		return fmt.Errorf("blob upload failed: %w", firstErr)
 	}
 	stats.BytesUploaded = uploaded
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 
 	// Final consistency check: drop any entry whose blob the server still
 	// doesn't have (e.g. same-hash siblings of a file that changed mid-run).
@@ -284,7 +324,7 @@ func (a *Agent) uploadMissing(cmd proto.RunBackup, res *scanResult, stats *proto
 			finalHashes[e.Hash] = true
 		}
 	}
-	stillMissing, err := a.checkAllBlobs(mapKeys(finalHashes))
+	stillMissing, err := a.checkAllBlobs(ctx, mapKeys(finalHashes))
 	if err != nil {
 		return err
 	}
@@ -310,12 +350,12 @@ func (a *Agent) uploadMissing(cmd proto.RunBackup, res *scanResult, stats *proto
 }
 
 // checkAllBlobs batches the hash existence check.
-func (a *Agent) checkAllBlobs(hashes []string) ([]string, error) {
+func (a *Agent) checkAllBlobs(ctx context.Context, hashes []string) ([]string, error) {
 	var missing []string
 	const batch = 1000
 	for i := 0; i < len(hashes); i += batch {
 		end := min(i+batch, len(hashes))
-		m, err := a.client.checkBlobs(hashes[i:end])
+		m, err := a.client.checkBlobs(ctx, hashes[i:end])
 		if err != nil {
 			return nil, err
 		}
@@ -327,8 +367,11 @@ func (a *Agent) checkAllBlobs(hashes []string) ([]string, error) {
 // uploadFile streams one file zstd-compressed to the server, verifying the
 // hash on the way. If the content no longer matches expectHash, the file is
 // re-uploaded under its current hash, which is returned.
-func (a *Agent) uploadFile(path, expectHash string) (rawBytes int64, actualHash string, err error) {
+func (a *Agent) uploadFile(ctx context.Context, path, expectHash string) (rawBytes int64, actualHash string, err error) {
 	for attempt := 0; attempt < 2; attempt++ {
+		if ctx.Err() != nil {
+			return 0, "", ctx.Err()
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return 0, "", fmt.Errorf("%s: %w", path, err)
@@ -352,16 +395,37 @@ func (a *Agent) uploadFile(path, expectHash string) (rawBytes int64, actualHash 
 			pw.CloseWithError(cerr)
 		}()
 
+		// Explicitly tie the pipe to ctx rather than relying on net/http to
+		// propagate cancellation into a custom io.Reader request body: if
+		// the transport's body-forwarding goroutine is parked on a Read
+		// from pr waiting for more compressed bytes, closing the
+		// connection (what ctx cancellation triggers internally) does not
+		// unblock that Read, and both this goroutine and the writer above
+		// would hang forever. Closing pr ourselves unblocks any pending
+		// Read *and* Write on the pipe immediately.
+		watchDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				pr.CloseWithError(ctx.Err())
+			case <-watchDone:
+			}
+		}()
+
 		// First attempt sends under the expected hash; the server verifies
 		// decompressed content, so a changed file is rejected there.
-		uploadErr := a.client.putBlob(expectHash, pr)
-		pr.CloseWithError(fmt.Errorf("upload finished")) // unblock writer on failure
+		uploadErr := a.client.putBlob(ctx, expectHash, pr)
+		pr.CloseWithError(fmt.Errorf("upload finished")) // unblock writer if still running
+		close(watchDone)
 		<-copyDone
 		f.Close()
 		got := hex.EncodeToString(hasher.Sum(nil))
 
 		if uploadErr == nil {
 			return read, got, nil
+		}
+		if ctx.Err() != nil {
+			return 0, "", ctx.Err() // cancelled mid-upload, not a content mismatch
 		}
 		if got == expectHash {
 			return 0, "", uploadErr // genuine upload failure
@@ -374,7 +438,7 @@ func (a *Agent) uploadFile(path, expectHash string) (rawBytes int64, actualHash 
 
 // commitManifest streams the manifest (zstd JSONL) to the server and caches
 // it locally as the base for the next incremental run.
-func (a *Agent) commitManifest(cmd proto.RunBackup, res *scanResult) (string, error) {
+func (a *Agent) commitManifest(ctx context.Context, cmd proto.RunBackup, res *scanResult) (string, error) {
 	tmp, err := os.CreateTemp(a.stateDir, "manifest-*.tmp")
 	if err != nil {
 		return "", err
@@ -406,7 +470,7 @@ func (a *Agent) commitManifest(cmd proto.RunBackup, res *scanResult) (string, er
 		return "", err
 	}
 
-	snapshotID, err := a.client.commitSnapshot(cmd.Job.ID, cmd.RunID, cmd.Mode,
+	snapshotID, err := a.client.commitSnapshot(ctx, cmd.Job.ID, cmd.RunID, cmd.Mode,
 		res.stats.FilesTotal, res.stats.BytesTotal, tmp)
 	tmp.Close()
 	if err != nil {
@@ -425,14 +489,14 @@ func (a *Agent) manifestCachePath(jobID string) string {
 // loadPrevManifest returns the previous snapshot's entries by path, from
 // the local cache or (failing that) fetched from the server. Returning nil
 // degrades gracefully to hashing everything.
-func (a *Agent) loadPrevManifest(jobID, prevSnapshotID string) map[string]proto.ManifestEntry {
+func (a *Agent) loadPrevManifest(ctx context.Context, jobID, prevSnapshotID string) map[string]proto.ManifestEntry {
 	if m := readManifestFile(a.manifestCachePath(jobID)); m != nil {
 		return m
 	}
 	if prevSnapshotID == "" {
 		return nil
 	}
-	rc, err := a.client.getManifest(prevSnapshotID)
+	rc, err := a.client.getManifest(ctx, prevSnapshotID)
 	if err != nil {
 		return nil
 	}

@@ -10,6 +10,11 @@
   }
 }
 * { box-sizing: border-box; }
+/* The native [hidden] attribute is only display:none via the UA stylesheet,
+   which loses to any author rule that sets display (e.g. .btn, .card) at
+   equal specificity. Force it to always win so hidden="" reliably hides
+   elements regardless of what other classes are applied. */
+[hidden] { display: none !important; }
 body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -70,6 +75,7 @@ textarea { font-family: ui-monospace, monospace; }
 .badge.running, .badge.queued { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 .badge.partial { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
 .badge.error { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+.badge.cancelled { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
 
 .dlg { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text);
   max-width: 720px; width: 90vw; padding: 1.25rem; }
