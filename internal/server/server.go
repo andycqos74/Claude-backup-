@@ -133,6 +133,14 @@ func (s *Server) Run() error {
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{s.tlsCert},
 			MinVersion:   tls.VersionTLS12,
+			// Capped at 1.2: .NET Framework's HttpWebRequest (used by
+			// Windows PowerShell 5.1's Invoke-WebRequest) fails the
+			// handshake against TLS 1.3's post-handshake NewSessionTicket
+			// message ("underlying connection was closed: unexpected error
+			// on a send"), even though every other client handles it fine.
+			// TLS 1.2 with modern cipher suites has no practical security
+			// downside here and sidesteps that whole bug class.
+			MaxVersion: tls.VersionTLS12,
 		},
 	}
 

@@ -25,11 +25,23 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $iwrArgs = @{ UseBasicParsing = $true }
 if ($PSVersionTable.PSVersion.Major -ge 6) {
-    # PowerShell 7+: the ServicePointManager callback is ignored; use the switch.
+    # PowerShell 7+: the ServicePointManager callback below doesn't apply
+    # (System.Net.Http-based); use the switch instead.
     $iwrArgs["SkipCertificateCheck"] = $true
 } else {
-    # Windows PowerShell 5.1: bypass via the global callback.
-    [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    # Windows PowerShell 5.1 (.NET Framework): the modern
+    # ServerCertificateValidationCallback delegate is unreliable in some
+    # environments (AV/EDR hooking, ServicePoint caching). The legacy
+    # ICertificatePolicy interface is the long-established, more reliable
+    # way to bypass validation on this stack.
+    Add-Type -ErrorAction SilentlyContinue @"
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
+public class CBTrustAllCertsPolicy : ICertificatePolicy {
+    public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
+}
+"@
+    [Net.ServicePointManager]::CertificatePolicy = New-Object CBTrustAllCertsPolicy
 }
 
 $dir = "$env:ProgramFiles\BackupAgent"
