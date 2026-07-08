@@ -34,13 +34,22 @@ if ($PSVersionTable.PSVersion.Major -ge 6) {
     # environments (AV/EDR hooking, ServicePoint caching). The legacy
     # ICertificatePolicy interface is the long-established, more reliable
     # way to bypass validation on this stack.
-    Add-Type -ErrorAction SilentlyContinue @"
+    #
+    # Guard with a type-exists check rather than relying on
+    # -ErrorAction SilentlyContinue: Add-Type's "type already exists"
+    # failure is a terminating error that ignores -ErrorAction under
+    # $ErrorActionPreference = "Stop" (as set above), which matters if this
+    # script runs twice in the same PowerShell process (e.g. re-invoked
+    # after a bootstrapping wrapper already defined the same class).
+    if (-not ('CBTrustAllCertsPolicy' -as [type])) {
+        Add-Type @"
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 public class CBTrustAllCertsPolicy : ICertificatePolicy {
     public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
 }
 "@
+    }
     [Net.ServicePointManager]::CertificatePolicy = New-Object CBTrustAllCertsPolicy
 }
 

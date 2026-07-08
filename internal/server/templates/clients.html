@@ -42,13 +42,15 @@ async function newToken() {
   // or AV/EDR-monitored environments.
   el('cmd-win').textContent =
 `if ($PSVersionTable.PSVersion.Major -lt 6) {
-  Add-Type -ErrorAction SilentlyContinue @"
+  if (-not ('CBTrustAllCertsPolicy' -as [type])) {
+    Add-Type @"
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 public class CBTrustAllCertsPolicy : ICertificatePolicy {
     public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
 }
 "@
+  }
   [Net.ServicePointManager]::CertificatePolicy = New-Object CBTrustAllCertsPolicy
 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
