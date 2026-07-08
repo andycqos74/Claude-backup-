@@ -1,4 +1,7 @@
-# Central Backup agent installer for Windows Server (run as Administrator).
+# Central Backup agent installer for Windows (Server or Windows 11).
+# Run in an ELEVATED PowerShell (Run as Administrator). Works on both
+# Windows PowerShell 5.1 and PowerShell 7+.
+#
 # Usage (from the server GUI enrollment dialog):
 #   .\install-agent.ps1 -Server https://SERVER:8443 -Token TOKEN -Fingerprint FP [-Name NAME]
 param(
@@ -8,31 +11,60 @@ param(
     [string]$Name = ""
 )
 $ErrorActionPreference = "Stop"
+$Server = $Server.TrimEnd('/')
 
-# The server uses a self-signed certificate; downloads skip validation here,
-# authenticity is enforced by the fingerprint pin during enrollment.
+# Must be elevated to install a service.
+$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw "This installer must be run in an elevated PowerShell (right-click > Run as Administrator)."
+}
+
+# The server uses a self-signed certificate, so the binary download skips
+# TLS validation here; authenticity is then enforced by the certificate
+# fingerprint pin during enrollment (and on every later connection).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-[Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+$iwrArgs = @{ UseBasicParsing = $true }
+if ($PSVersionTable.PSVersion.Major -ge 6) {
+    # PowerShell 7+: the ServicePointManager callback is ignored; use the switch.
+    $iwrArgs["SkipCertificateCheck"] = $true
+} else {
+    # Windows PowerShell 5.1: bypass via the global callback.
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+}
 
 $dir = "$env:ProgramFiles\BackupAgent"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $exe = "$dir\backup-agent.exe"
 
-Write-Host "Downloading agent binary..."
-Invoke-WebRequest -UseBasicParsing "$Server/dl/backup-agent-windows-amd64.exe" -OutFile $exe
+# If a previous install exists, stop and remove its service so this is
+# idempotent (safe to re-run).
+if (Get-Service -Name CentralBackupAgent -ErrorAction SilentlyContinue) {
+    Write-Host "Existing agent found - removing old service..."
+    & $exe service uninstall 2>$null
+    Start-Sleep -Seconds 2
+}
+
+Write-Host "Downloading agent binary from $Server ..."
+Invoke-WebRequest @iwrArgs -Uri "$Server/dl/backup-agent-windows-amd64.exe" -OutFile $exe
+# Clear the mark-of-the-web so the service can launch it without prompts.
+Unblock-File -Path $exe -ErrorAction SilentlyContinue
 
 Write-Host "Enrolling with $Server ..."
 $enrollArgs = @("enroll", "--server", $Server, "--token", $Token)
 if ($Fingerprint) { $enrollArgs += @("--fingerprint", $Fingerprint) }
 if ($Name)        { $enrollArgs += @("--name", $Name) }
 & $exe @enrollArgs
-if ($LASTEXITCODE -ne 0) { throw "enrollment failed" }
+if ($LASTEXITCODE -ne 0) { throw "enrollment failed (exit $LASTEXITCODE)" }
 
-Write-Host "Installing Windows service..."
+Write-Host "Installing and starting the Windows service..."
 & $exe service install
-if ($LASTEXITCODE -ne 0) { throw "service install failed" }
+if ($LASTEXITCODE -ne 0) { throw "service install failed (exit $LASTEXITCODE)" }
 
 Write-Host ""
-Write-Host "Done. The agent service (CentralBackupAgent) is running."
-Write-Host "  jobs:   & '$exe' job list"
-Write-Host "  config: C:\ProgramData\BackupAgent\agent.yaml (syncs with the server GUI)"
+Write-Host "Done. The agent service (CentralBackupAgent) is installed and running."
+Write-Host "  service: Get-Service CentralBackupAgent"
+Write-Host "  logs:    Event Viewer > Windows Logs > Application (source CentralBackupAgent)"
+Write-Host "  jobs:    & '$exe' job list"
+Write-Host "  config:  C:\ProgramData\BackupAgent\agent.yaml (syncs with the server GUI)"
+Write-Host ""
+Write-Host "The client should appear under Clients in the server GUI within a few seconds."

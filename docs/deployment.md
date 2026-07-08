@@ -3,6 +3,54 @@
 This walks through standing up the central server and enrolling your first
 clients. There are two ways to run the server — pick one.
 
+---
+
+## Quick path: Docker server + Windows client
+
+The condensed version for the most common setup. Full detail is in the
+sections below.
+
+**1. Server (Docker host with internet + Docker Compose):**
+
+```bash
+git clone <this-repo> && cd <repo>
+CB_SERVER_NAME=<docker-host-ip-or-dns> \
+  docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+Publish/allow inbound **TCP 8443** to the Docker host. `CB_SERVER_NAME`
+should be the address the Windows client will use to reach the host (its
+LAN IP is fine, e.g. `192.168.1.50`).
+
+**2. First run:** browse to `https://<docker-host>:8443`, accept the
+self-signed cert warning, create the admin account. Go to **Clients →
+Enroll new client** and copy the **Windows** command.
+
+**3. Windows client (elevated PowerShell — works on Win 11 and Server):**
+paste the command from the dialog. It downloads the agent, enrolls, and
+installs the `CentralBackupAgent` service. The client appears under
+**Clients** within seconds.
+
+**4. Test:** open the client → **New job** → back up a specific folder
+(e.g. `C:\Users\<you>\Documents` — start small, not all of `C:\`) →
+**Back up now** → then open the snapshot and restore a file to a temp
+folder to confirm.
+
+Windows notes:
+- Run the command in an **elevated** PowerShell (Run as Administrator);
+  the installer checks and will tell you if it isn't.
+- The service runs as LocalSystem, so it can read local files but **not**
+  user-mapped network drives. Back up local paths (or UNC paths the
+  machine account can reach).
+- **Open/locked files** (a file held by an app, some profile/registry
+  files) are retried then skipped and listed in the run log — the run is
+  marked "partial", not failed. Consistent snapshots of locked files
+  (VSS) are on the roadmap. For a clean first test, pick a folder without
+  files currently open.
+- The `CB_SERVER_NAME` value only needs to match for the *browser* to
+  avoid an extra warning; the agent verifies the server by certificate
+  **fingerprint**, not hostname, so it works even over a bare IP.
+
 ## 0. Before you start
 
 - Choose the machine that will **hold the backups** (the server). It needs
