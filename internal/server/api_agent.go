@@ -240,17 +240,17 @@ func (s *Server) handleBlobPut(w http.ResponseWriter, r *http.Request, agentID s
 	}()
 
 	key := storage.BlobKey(hash)
-	stored, putErr := s.storage.Put(key, io.TeeReader(r.Body, pw))
+	stored, putErr := s.backend().Put(key, io.TeeReader(r.Body, pw))
 	pw.Close()
 	decErr := <-verifyErr
 
 	if putErr != nil || decErr != nil {
-		s.storage.Delete(key)
+		s.backend().Delete(key)
 		httpError(w, http.StatusBadRequest, "blob upload failed")
 		return
 	}
 	if got := hex.EncodeToString(hasher.Sum(nil)); got != hash {
-		s.storage.Delete(key)
+		s.backend().Delete(key)
 		httpError(w, http.StatusBadRequest, "content hash mismatch")
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request, agentID s
 		httpError(w, http.StatusBadRequest, "invalid hash")
 		return
 	}
-	rc, err := s.storage.Get(storage.BlobKey(hash))
+	rc, err := s.backend().Get(storage.BlobKey(hash))
 	if err != nil {
 		httpError(w, http.StatusNotFound, "blob not found")
 		return
@@ -302,7 +302,7 @@ func (s *Server) handleSnapshotCommit(w http.ResponseWriter, r *http.Request, ag
 
 	snapID := store.NewID()
 	key := storage.ManifestKey(snapID)
-	if _, err := s.storage.Put(key, io.LimitReader(r.Body, 8<<30)); err != nil {
+	if _, err := s.backend().Put(key, io.LimitReader(r.Body, 8<<30)); err != nil {
 		httpError(w, http.StatusInternalServerError, "manifest store failed")
 		return
 	}
@@ -311,7 +311,7 @@ func (s *Server) handleSnapshotCommit(w http.ResponseWriter, r *http.Request, ag
 		Mode: mode, Files: files, Bytes: bytes, ManifestKey: key,
 	})
 	if err != nil {
-		s.storage.Delete(key)
+		s.backend().Delete(key)
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -324,7 +324,7 @@ func (s *Server) handleManifestGet(w http.ResponseWriter, r *http.Request, agent
 		httpError(w, http.StatusNotFound, "snapshot not found")
 		return
 	}
-	rc, err := s.storage.Get(sn.ManifestKey)
+	rc, err := s.backend().Get(sn.ManifestKey)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "manifest not found")
 		return

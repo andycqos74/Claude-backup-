@@ -51,16 +51,27 @@ func ConfigFromEnv() Config {
 type Server struct {
 	cfg         Config
 	store       *store.Store
-	storage     storage.Backend
 	hub         *Hub
 	fingerprint string
 	tlsCert     tls.Certificate
+
+	// storageMu guards the active backend, which can be swapped at runtime
+	// when the admin changes the storage provider. Read it via backend().
+	storageMu     sync.RWMutex
+	storageActive storage.Backend
 
 	// commitMu serialises snapshot commits against garbage collection:
 	// commits take the read lock, GC takes the write lock.
 	commitMu sync.RWMutex
 
 	web *webUI
+}
+
+// backend returns the currently active storage backend.
+func (s *Server) backend() storage.Backend {
+	s.storageMu.RLock()
+	defer s.storageMu.RUnlock()
+	return s.storageActive
 }
 
 func New(cfg Config) (*Server, error) {
@@ -70,10 +81,6 @@ func New(cfg Config) (*Server, error) {
 	st, err := store.Open(filepath.Join(cfg.DataDir, "server.db"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
-	}
-	backend, err := storage.NewLocalFS(cfg.StorageDir)
-	if err != nil {
-		return nil, fmt.Errorf("open storage: %w", err)
 	}
 
 	certFile, keyFile := cfg.CertFile, cfg.KeyFile
@@ -93,10 +100,12 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg:         cfg,
 		store:       st,
-		storage:     backend,
 		hub:         newHub(),
 		fingerprint: fp,
 		tlsCert:     cert,
+	}
+	if err := s.initStorage(); err != nil {
+		return nil, fmt.Errorf("open storage: %w", err)
 	}
 	s.web, err = newWebUI(s)
 	if err != nil {

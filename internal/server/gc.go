@@ -66,7 +66,7 @@ func (s *Server) deleteSnapshot(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.storage.Delete(sn.ManifestKey); err != nil {
+	if err := s.backend().Delete(sn.ManifestKey); err != nil {
 		return err
 	}
 	return s.store.DeleteSnapshot(id)
@@ -113,7 +113,7 @@ func (s *Server) gcBlobs() error {
 		if referenced[hash] || createdAt > graceCutoff {
 			continue
 		}
-		if err := s.storage.Delete(storage.BlobKey(hash)); err != nil {
+		if err := s.backend().Delete(storage.BlobKey(hash)); err != nil {
 			return err
 		}
 		if err := s.store.DeleteBlob(hash); err != nil {

@@ -23,7 +23,7 @@ import (
 
 // eachManifestEntry streams a snapshot manifest, invoking fn per entry.
 func (s *Server) eachManifestEntry(manifestKey string, fn func(e proto.ManifestEntry) error) error {
-	rc, err := s.storage.Get(manifestKey)
+	rc, err := s.backend().Get(manifestKey)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func underPrefix(path string, prefixes []string) bool {
 
 // streamFile writes one file's decompressed content from blob storage.
 func (s *Server) streamFile(w io.Writer, hash string) error {
-	rc, err := s.storage.Get(storage.BlobKey(hash))
+	rc, err := s.backend().Get(storage.BlobKey(hash))
 	if err != nil {
 		return err
 	}

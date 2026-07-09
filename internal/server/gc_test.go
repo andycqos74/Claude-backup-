@@ -26,7 +26,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{store: st, storage: backend, hub: newHub()}
+	return &Server{store: st, storageActive: backend, hub: newHub()}
 }
 
 // putManifest stores a manifest referencing the given hashes and records
@@ -41,7 +41,7 @@ func putManifest(t *testing.T, s *Server, snapID, jobID string, hashes ...string
 	}
 	enc.Close()
 	key := storage.ManifestKey(snapID)
-	if _, err := s.storage.Put(key, &buf); err != nil {
+	if _, err := s.backend().Put(key, &buf); err != nil {
 		t.Fatal(err)
 	}
 	err := s.store.CreateSnapshot(store.Snapshot{
@@ -55,7 +55,7 @@ func putManifest(t *testing.T, s *Server, snapID, jobID string, hashes ...string
 
 func addBlob(t *testing.T, s *Server, hash string) {
 	t.Helper()
-	if _, err := s.storage.Put(storage.BlobKey(hash), bytes.NewReader([]byte("x"))); err != nil {
+	if _, err := s.backend().Put(storage.BlobKey(hash), bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.store.AddBlob(hash, 1, 1); err != nil {
@@ -87,10 +87,10 @@ func TestGCBlobs(t *testing.T) {
 	if _, ok := blobs[h(1)]; !ok {
 		t.Fatal("referenced blob swept")
 	}
-	if ok, _ := s.storage.Has(storage.BlobKey(h(3))); ok {
+	if ok, _ := s.backend().Has(storage.BlobKey(h(3))); ok {
 		t.Fatal("swept blob still in storage")
 	}
-	if ok, _ := s.storage.Has(storage.BlobKey(h(1))); !ok {
+	if ok, _ := s.backend().Has(storage.BlobKey(h(1))); !ok {
 		t.Fatal("referenced blob removed from storage")
 	}
 }
@@ -137,7 +137,7 @@ func TestPruneRetentionKeepLast(t *testing.T) {
 		t.Fatalf("kept wrong snapshots: %s, %s", snaps[0].ID, snaps[1].ID)
 	}
 	// Their manifests must be gone from storage.
-	if ok, _ := s.storage.Has(storage.ManifestKey("snap1")); ok {
+	if ok, _ := s.backend().Has(storage.ManifestKey("snap1")); ok {
 		t.Fatal("pruned snapshot manifest still in storage")
 	}
 }
@@ -173,7 +173,7 @@ func TestSnapshotTreeAndZipHelpers(t *testing.T) {
 	je.Encode(proto.ManifestEntry{Type: "f", Path: "/home/u/sub/b.txt", Size: 4, Hash: "h2"})
 	enc.Close()
 	key := storage.ManifestKey("snapT")
-	s.storage.Put(key, &buf)
+	s.backend().Put(key, &buf)
 	sn := &store.Snapshot{ID: "snapT", ManifestKey: key}
 
 	root, err := s.snapshotTree(sn, "")

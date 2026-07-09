@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS enroll_tokens (
 	expires_at INTEGER NOT NULL,
 	used_by TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS settings (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agents (
 	id TEXT PRIMARY KEY,
 	secret_hash TEXT NOT NULL,
@@ -761,4 +765,27 @@ func (s *Store) Stats() (StorageStats, error) {
 	}
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM snapshots`).Scan(&st.Snapshots)
 	return st, err
+}
+
+// ---- settings (key/value) ----
+
+// GetSetting returns the stored value for key, or "" if unset.
+func (s *Store) GetSetting(key string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting stores (or replaces) a value. An empty value deletes the key.
+func (s *Store) SetSetting(key, value string) error {
+	if value == "" {
+		_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?,?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
 }
