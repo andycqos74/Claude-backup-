@@ -76,7 +76,12 @@ func Build(cfg Config, token TokenSourceFunc, httpClient *http.Client) (Backend,
 			return nil, fmt.Errorf("onedrive backend requires a token source")
 		}
 		return newOneDrive(cfg, token, httpClient), nil
-	case ProviderGoogleDrive, ProviderBox:
+	case ProviderGoogleDrive:
+		if token == nil {
+			return nil, fmt.Errorf("google drive backend requires a token source")
+		}
+		return newGoogleDrive(cfg, token, httpClient), nil
+	case ProviderBox:
 		return nil, fmt.Errorf("storage provider %q is not available yet", cfg.Provider)
 	default:
 		return nil, fmt.Errorf("unknown storage provider %q", cfg.Provider)

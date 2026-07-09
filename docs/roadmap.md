@@ -2,11 +2,16 @@
 
 Planned enhancements, roughly in priority order.
 
-1. **Cloud storage backends** — Google Drive and OneDrive implementations
-   of the `storage.Backend` interface (OAuth device flow, chunked upload,
-   rate limiting), plus mirroring local storage to a secondary backend for
-   3-2-1 style off-site copies. The interface is already in place
-   (`internal/server/storage`).
+1. **Cloud storage backends** — *OneDrive and Google Drive are done*
+   (Settings → Backup storage backend). Remaining:
+   - **Box** backend (needs Box's chunked-upload + SHA-1 commit protocol
+     for objects over 50 MB; the provider is listed but disabled in the GUI
+     until this lands).
+   - **Off-site mirror**: keep local storage primary and asynchronously
+     replicate to a cloud backend for 3-2-1 style copies (today a single
+     backend is active at a time).
+   - **Migration**: copy existing snapshots when switching backends (today
+     a switch only affects new backups).
 2. **Client-side encryption** — per-client or per-job keys, encrypt blobs
    and manifests before upload so the server never sees plaintext.
 3. **Windows VSS** — snapshot volumes before reading so locked/open files

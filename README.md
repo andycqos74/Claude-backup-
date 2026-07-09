@@ -42,8 +42,10 @@ compressed and deduplicated, stored on the server's local storage.
   garbage collection.
 - **Docker-aware**: containerized agent for Docker hosts with pre/post
   hooks (e.g. `pg_dump` before backup) and host-volume access.
-- Pluggable storage backend: local disk today; Google Drive / OneDrive
-  planned (see [docs/roadmap.md](docs/roadmap.md)).
+- **Pluggable storage backend**: store backups on the server's local disk,
+  or in your own **OneDrive / OneDrive for Business** or **Google Drive**
+  via an OAuth connect flow in the GUI (Box coming soon). See
+  [docs/storage.md](docs/storage.md).
 
 ## Quick start — server
 
@@ -152,7 +154,9 @@ go vet ./...
 scripts/build-release.sh   # cross-compile server + agents into dist/
 ```
 
-See [docs/security.md](docs/security.md) for the security model,
+See [docs/deployment.md](docs/deployment.md) for the deploy runbook,
+[docs/storage.md](docs/storage.md) for cloud storage backends,
+[docs/security.md](docs/security.md) for the security model,
 [docs/operations.md](docs/operations.md) for day-2 operations and
-[docs/roadmap.md](docs/roadmap.md) for planned work (cloud storage
-backends, VSS, client-side encryption).
+[docs/roadmap.md](docs/roadmap.md) for planned work (Box, off-site mirror,
+VSS, client-side encryption).

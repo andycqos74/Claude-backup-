@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Google Drive — Central Backup</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>body{max-width:800px;margin:2rem auto;padding:0 1rem} li{margin:.4rem 0}</style>
+</head>
+<body>
+<h1>Connecting Google Drive</h1>
+<p>Central Backup stores backups in your own Google account using an OAuth
+app that <b>you</b> register once in Google Cloud. Your data stays in your
+Drive and no credentials are shared.</p>
+
+<h2>1. Create a Google Cloud project + OAuth app</h2>
+<ol>
+  <li>Open the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create (or select) a project.</li>
+  <li>Go to <b>APIs &amp; Services → Library</b>, search for <b>Google Drive API</b>, and click <b>Enable</b>.</li>
+  <li>Go to <b>APIs &amp; Services → OAuth consent screen</b>. Choose <b>External</b> (or <b>Internal</b> if you use Google Workspace), fill in the app name and your email, and save. Add your Google account as a <b>Test user</b> (under Audience) so you can authorise while the app is unverified.</li>
+</ol>
+
+<h2>2. Create OAuth credentials</h2>
+<ol>
+  <li>Go to <b>APIs &amp; Services → Credentials → Create credentials → OAuth client ID</b>.</li>
+  <li>Application type: <b>Web application</b>.</li>
+  <li>Under <b>Authorized redirect URIs</b>, add the redirect URL shown on the Settings page, exactly:
+    <code>https://your-server:8443/api/admin/storage/oauth/callback</code>.</li>
+  <li>Click <b>Create</b> and copy the <b>Client ID</b> and <b>Client secret</b>.</li>
+</ol>
+
+<h2>3. Connect in Central Backup</h2>
+<ol>
+  <li>On the Settings page, select provider <b>Google Drive</b>.</li>
+  <li>Paste the Client ID and Client secret, optionally set a destination folder (default <code>central-backup</code>), and click <b>Save app credentials</b>.</li>
+  <li>Click <b>Connect &amp; authorise</b>, choose your Google account, and approve. If you see an "unverified app" warning, click <b>Advanced → Go to (app)</b> — that is expected for your own app.</li>
+  <li>You will be returned to Settings showing "connected as &lt;your email&gt;". New backups now go to that Drive.</li>
+</ol>
+
+<h2>Notes</h2>
+<ul>
+  <li>The app uses the <code>drive.file</code> scope, so Central Backup can only see the files it creates — not the rest of your Drive.</li>
+  <li><b>Existing backups are not moved.</b> Snapshots written before the switch stay on the previous backend.</li>
+  <li>Backups appear as ordinary files under the destination folder; don't edit them.</li>
+</ul>
+<p><a href="/settings">← Back to Settings</a></p>
+</body>
+</html>
