@@ -17,6 +17,48 @@
 <p><button class="btn" onclick="runGC()">Run retention + cleanup now</button>
 <span class="muted">Applies retention policies and removes unreferenced data. Also runs automatically once a day.</span></p>
 
+<h2>Backup storage backend</h2>
+<div class="card">
+  <p>Where new backups are stored. <b>Changing this does not move existing
+  backups</b> — snapshots already written to the previous backend stay there
+  and remain restorable only while that backend is active.</p>
+  <p>Current: <b id="storage-current">…</b> <span id="storage-account" class="muted"></span></p>
+
+  <label>Provider
+    <select id="storage-provider">
+      <option value="local">Local disk (on the server)</option>
+      <option value="onedrive">OneDrive / OneDrive for Business</option>
+      <option value="gdrive">Google Drive</option>
+      <option value="box">Box</option>
+    </select>
+  </label>
+
+  <div id="storage-local" hidden>
+    <p class="muted">Backups are stored on the server's local disk (the
+    <code>/data</code> volume). This is the default.</p>
+    <button class="btn primary" onclick="useLocal()">Use local disk</button>
+  </div>
+
+  <div id="storage-cloud" hidden>
+    <ol class="muted" style="line-height:1.6">
+      <li>Register an OAuth app in the provider's developer console
+        (<a id="storage-help" href="#" target="_blank" rel="noopener">setup guide</a>).</li>
+      <li>Add this <b>redirect URL</b> to the app, exactly:
+        <pre class="code" id="storage-redirect" style="margin:.3rem 0"></pre></li>
+      <li>Paste the app's Client ID and Secret below and save.</li>
+      <li>Click <b>Connect</b> and sign in to authorise access.</li>
+    </ol>
+    <label>Client ID <input id="storage-client-id" autocomplete="off"></label>
+    <label>Client secret <input id="storage-client-secret" type="password" autocomplete="off" placeholder="(unchanged)"></label>
+    <label>Destination folder <input id="storage-folder" placeholder="central-backup"></label>
+    <div class="row">
+      <button class="btn" onclick="saveApp()">Save app credentials</button>
+      <button class="btn primary" id="storage-connect" onclick="connect()" disabled>Connect &amp; authorise</button>
+    </div>
+    <p class="muted" id="storage-connect-hint"></p>
+  </div>
+</div>
+
 <h2>Change password</h2>
 <form id="pw-form" class="form-card">
   <label>Current password <input name="old" type="password" autocomplete="current-password" required></label>
@@ -24,6 +66,15 @@
   <button class="btn primary" type="submit">Change password</button>
 </form>
 <script>
+const STORAGE_HELP = {
+  onedrive: '/static/storage-onedrive.html',
+  gdrive: '/static/storage-gdrive.html',
+  box: '/static/storage-box.html',
+};
+const PROVIDER_LABEL = {
+  local: 'Local disk', onedrive: 'OneDrive', gdrive: 'Google Drive', box: 'Box',
+};
+
 async function load() {
   const d = await api('GET', '/api/admin/settings');
   el('fp').textContent = d.fingerprint;
@@ -31,7 +82,93 @@ async function load() {
   el('st-blobs').textContent = d.stats.Blobs;
   el('st-stored').textContent = fmtBytes(d.stats.SizeStored);
   el('st-raw').textContent = fmtBytes(d.stats.SizeRaw);
+  await loadStorage();
 }
+
+let storageState = {};
+async function loadStorage() {
+  const s = await api('GET', '/api/admin/storage');
+  storageState = s;
+  el('storage-current').textContent = PROVIDER_LABEL[s.provider] || s.provider;
+  el('storage-account').textContent =
+    s.provider !== 'local' ? (s.connected ? `· connected as ${s.account || '?'}` : '· not connected') : '';
+  el('storage-redirect').textContent = s.redirect_url;
+  // Only switch the dropdown to the stored provider on first load, so it
+  // doesn't fight the admin mid-edit.
+  if (!el('storage-provider').dataset.init) {
+    el('storage-provider').value = s.provider;
+    el('storage-provider').dataset.init = '1';
+  }
+  if (s.client_id) el('storage-client-id').value = s.client_id;
+  if (s.folder) el('storage-folder').value = s.folder;
+  renderStorageProvider();
+  el('storage-connect').disabled = !s.has_app;
+  el('storage-connect-hint').textContent = s.has_app
+    ? '' : 'Save the app credentials first, then Connect becomes available.';
+}
+
+function renderStorageProvider() {
+  const p = el('storage-provider').value;
+  el('storage-local').hidden = p !== 'local';
+  el('storage-cloud').hidden = p === 'local';
+  if (p !== 'local') el('storage-help').href = STORAGE_HELP[p] || '#';
+}
+el('storage-provider').addEventListener('change', () => {
+  el('storage-client-secret').value = '';
+  el('storage-connect').disabled = true;
+  el('storage-connect-hint').textContent = 'Save the app credentials for this provider, then Connect.';
+  renderStorageProvider();
+});
+
+async function useLocal() {
+  try {
+    await api('POST', '/api/admin/storage/local');
+    toast('Switched to local disk storage');
+    loadStorage();
+  } catch (err) { toast(err.message); }
+}
+
+async function saveApp() {
+  const body = {
+    provider: el('storage-provider').value,
+    client_id: el('storage-client-id').value.trim(),
+    client_secret: el('storage-client-secret').value,
+    folder: el('storage-folder').value.trim(),
+  };
+  if (!body.client_id) { toast('Client ID is required'); return; }
+  // If the secret field is left blank and we already have this app saved,
+  // the server keeps the existing secret only when id+secret both match —
+  // so require a secret unless already connected with the same id.
+  if (!body.client_secret && !(storageState.has_app && storageState.client_id === body.client_id)) {
+    toast('Client secret is required'); return;
+  }
+  try {
+    const r = await api('POST', '/api/admin/storage/app', body);
+    el('storage-redirect').textContent = r.redirect_url;
+    toast('App credentials saved — now click Connect');
+    el('storage-client-secret').value = '';
+    loadStorage();
+  } catch (err) { toast(err.message); }
+}
+
+async function connect() {
+  try {
+    const r = await api('POST', '/api/admin/storage/connect');
+    // Full-page navigate to the provider consent screen.
+    location.href = r.auth_url;
+  } catch (err) { toast(err.message); }
+}
+
+// Surface the OAuth callback result (redirected back to /settings).
+(function storageCallbackResult() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('storage') === 'connected') toast('Cloud storage connected');
+  const err = q.get('storage_error');
+  if (err) toast('Storage error: ' + err);
+  if (q.has('storage') || q.has('storage_error')) {
+    history.replaceState({}, '', '/settings');
+  }
+})();
 async function runGC() {
   toast('Cleanup started…');
   try { await api('POST', '/api/admin/gc'); toast('Cleanup finished'); load(); }

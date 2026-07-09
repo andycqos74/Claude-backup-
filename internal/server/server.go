@@ -64,6 +64,9 @@ type Server struct {
 	// commits take the read lock, GC takes the write lock.
 	commitMu sync.RWMutex
 
+	// oauth holds the in-flight storage "connect" flow state.
+	oauth oauthFlow
+
 	web *webUI
 }
 
@@ -128,6 +131,7 @@ func (s *Server) Run() error {
 
 	// Admin API (session cookie).
 	s.registerAdminAPI(mux)
+	s.registerStorageAPI(mux)
 
 	// Web GUI.
 	s.web.register(mux)
