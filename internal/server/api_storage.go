@@ -94,6 +94,10 @@ func (s *Server) handleStorageSetApp(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "client ID and secret are required")
 		return
 	}
+	if msg := clientIDMismatch(provider, strings.TrimSpace(req.ClientID)); msg != "" {
+		httpError(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	// Preserve an existing refresh token only if the app identity is
 	// unchanged; otherwise the old token no longer applies.
@@ -259,6 +263,24 @@ func (s *Server) oauthRedirectURLFromRequest(r *http.Request, _ storage.Provider
 		return s.oauthRedirectURL()
 	}
 	return fmt.Sprintf("https://%s/api/admin/storage/oauth/callback", host)
+}
+
+// clientIDMismatch catches the common mistake of pasting one provider's
+// OAuth client ID into another (e.g. a Google client ID for OneDrive). It
+// returns a helpful message, or "" if the ID looks plausible.
+func clientIDMismatch(provider storage.Provider, clientID string) string {
+	isGoogle := strings.HasSuffix(clientID, ".apps.googleusercontent.com")
+	switch provider {
+	case storage.ProviderOneDrive:
+		if isGoogle {
+			return "That looks like a Google client ID (ends in .apps.googleusercontent.com). OneDrive needs the Azure app registration's Application (client) ID (a GUID)."
+		}
+	case storage.ProviderGoogleDrive:
+		if !isGoogle {
+			return "That doesn't look like a Google OAuth client ID (it should end in .apps.googleusercontent.com). Use the client ID from Google Cloud → Credentials."
+		}
+	}
+	return ""
 }
 
 func newOAuthState() string {

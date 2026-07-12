@@ -110,8 +110,17 @@ async function loadStorage() {
     el('storage-provider').value = s.provider;
     el('storage-provider').dataset.init = '1';
   }
-  if (s.client_id) el('storage-client-id').value = s.client_id;
-  if (s.folder) el('storage-folder').value = s.folder;
+  // Credentials are provider-specific. Only ever pre-fill them when the
+  // selected provider matches the one they belong to — otherwise a client
+  // ID from a previously configured provider (e.g. Google) could linger in
+  // the field and be sent to the wrong provider (e.g. Microsoft).
+  if (el('storage-provider').value === s.provider) {
+    el('storage-client-id').value = s.client_id || '';
+    el('storage-folder').value = s.folder || '';
+  } else {
+    el('storage-client-id').value = '';
+    el('storage-folder').value = '';
+  }
   renderStorageProvider();
   el('storage-connect').disabled = !s.has_app;
   el('storage-connect-hint').textContent = s.has_app
@@ -125,9 +134,22 @@ function renderStorageProvider() {
   if (p !== 'local') el('storage-help').href = STORAGE_HELP[p] || '#';
 }
 el('storage-provider').addEventListener('change', () => {
+  const p = el('storage-provider').value;
+  // Clear provider-specific credentials so one provider's app details can
+  // never be submitted to another. Re-fill only if the newly selected
+  // provider is the one currently stored.
+  if (p === storageState.provider) {
+    el('storage-client-id').value = storageState.client_id || '';
+    el('storage-folder').value = storageState.folder || '';
+    el('storage-connect').disabled = !storageState.has_app;
+    el('storage-connect-hint').textContent = storageState.has_app ? '' : 'Save the app credentials for this provider, then Connect.';
+  } else {
+    el('storage-client-id').value = '';
+    el('storage-folder').value = '';
+    el('storage-connect').disabled = true;
+    el('storage-connect-hint').textContent = 'Save the app credentials for this provider, then Connect.';
+  }
   el('storage-client-secret').value = '';
-  el('storage-connect').disabled = true;
-  el('storage-connect-hint').textContent = 'Save the app credentials for this provider, then Connect.';
   renderStorageProvider();
 });
 
