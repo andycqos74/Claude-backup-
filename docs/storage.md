@@ -36,11 +36,19 @@ client secret and refresh token are never sent back to the browser.
 
 ## Important behaviours
 
+- **Each backend is an independent store.** The dedup index and the set of
+  snapshots are tracked *per backend*. When you switch backends, the new one
+  starts empty, so the next backup re-uploads everything and produces
+  complete, restorable snapshots on the new backend.
 - **Switching backends does not move existing data.** Snapshots already
-  written to the previous backend stay there and are restorable only while
-  that backend is active. Plan a switch when you're starting a fresh backup
-  set, or keep the old backend if you still need those snapshots. (Automatic
-  migration is on the roadmap.)
+  written to the previous backend stay there and are browsable/restorable
+  only while that backend is active. The GUI shows the snapshots for the
+  **currently active** backend; switching back to a previous backend brings
+  its snapshots back into view. (Automatic migration between backends is on
+  the roadmap.)
+- After switching (e.g. local → OneDrive), the **first backup of each job is
+  effectively a full backup** to the new backend — expected, and why the
+  first cloud backup uploads the most data.
 - **One active backend at a time.** There is no simultaneous local+cloud
   mirror yet (also on the roadmap). If you want 3-2-1 today, run periodic
   syncs of the local `/data/storage` directory with your own tooling.

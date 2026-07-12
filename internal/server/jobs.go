@@ -105,7 +105,7 @@ func validateJob(j *proto.Job) error {
 // FullEvery-th run is a full (which re-reads and re-verifies every file);
 // the first-ever run of a job is always effectively full.
 func (s *Server) scheduledMode(row *store.JobRow) string {
-	if _, err := s.store.LatestSnapshot(row.Job.ID); err == store.ErrNotFound {
+	if _, err := s.store.LatestSnapshot(s.backendKey(), row.Job.ID); err == store.ErrNotFound {
 		return proto.ModeFull
 	}
 	if row.Job.FullEvery > 0 && row.RunCount%int64(row.Job.FullEvery) == 0 {
@@ -158,7 +158,7 @@ func (s *Server) startBackup(row *store.JobRow, mode string, queue bool) (runID 
 
 func (s *Server) sendRunBackup(runID string, job proto.Job, mode string) {
 	prevID := ""
-	if prev, err := s.store.LatestSnapshot(job.ID); err == nil {
+	if prev, err := s.store.LatestSnapshot(s.backendKey(), job.ID); err == nil {
 		prevID = prev.ID
 	}
 	ok := s.hub.Send(job.AgentID, proto.MsgRunBackup, proto.RunBackup{

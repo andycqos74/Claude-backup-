@@ -26,7 +26,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{store: st, storageActive: backend, hub: newHub()}
+	return &Server{store: st, storageActive: backend, storageBackendID: "local", hub: newHub()}
 }
 
 // putManifest stores a manifest referencing the given hashes and records
@@ -45,7 +45,7 @@ func putManifest(t *testing.T, s *Server, snapID, jobID string, hashes ...string
 		t.Fatal(err)
 	}
 	err := s.store.CreateSnapshot(store.Snapshot{
-		ID: snapID, JobID: jobID, AgentID: "a1", Mode: proto.ModeFull,
+		ID: snapID, Backend: s.backendKey(), JobID: jobID, AgentID: "a1", Mode: proto.ModeFull,
 		Files: int64(len(hashes)), ManifestKey: key,
 	})
 	if err != nil {
@@ -58,7 +58,7 @@ func addBlob(t *testing.T, s *Server, hash string) {
 	if _, err := s.backend().Put(storage.BlobKey(hash), bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.store.AddBlob(hash, 1, 1); err != nil {
+	if err := s.store.AddBlob(s.backendKey(), hash, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -80,7 +80,7 @@ func TestGCBlobs(t *testing.T) {
 	if err := s.gcBlobs(); err != nil {
 		t.Fatal(err)
 	}
-	blobs, _ := s.store.AllBlobs()
+	blobs, _ := s.store.AllBlobs("local")
 	if len(blobs) != 2 || blobs[h(3)] != 0 && len(blobs) == 3 {
 		t.Fatalf("expected blob %s swept, have %v", h(3), blobs)
 	}
@@ -106,7 +106,7 @@ func TestGCGracePeriod(t *testing.T) {
 	if err := s.gcBlobs(); err != nil {
 		t.Fatal(err)
 	}
-	blobs, _ := s.store.AllBlobs()
+	blobs, _ := s.store.AllBlobs("local")
 	if _, ok := blobs[h]; !ok {
 		t.Fatal("fresh unreferenced blob swept inside grace period")
 	}
@@ -128,7 +128,7 @@ func TestPruneRetentionKeepLast(t *testing.T) {
 	if err := s.pruneRetention(); err != nil {
 		t.Fatal(err)
 	}
-	snaps, _ := s.store.ListSnapshots("", "job1")
+	snaps, _ := s.store.ListSnapshots("local", "", "job1")
 	if len(snaps) != 2 {
 		t.Fatalf("expected 2 snapshots after prune, have %d", len(snaps))
 	}
@@ -157,7 +157,7 @@ func TestPruneNoPolicyKeepsAll(t *testing.T) {
 	if err := s.pruneRetention(); err != nil {
 		t.Fatal(err)
 	}
-	snaps, _ := s.store.ListSnapshots("", "job1")
+	snaps, _ := s.store.ListSnapshots("local", "", "job1")
 	if len(snaps) != 3 {
 		t.Fatalf("no-policy job lost snapshots: %d left", len(snaps))
 	}

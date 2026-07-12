@@ -76,10 +76,10 @@ func (s *Server) initStorage() error {
 		if lerr != nil {
 			return lerr
 		}
-		s.setBackend(local)
+		s.setBackend(local, storage.Config{Provider: storage.ProviderLocal})
 		return nil
 	}
-	s.setBackend(backend)
+	s.setBackend(backend, cfg)
 	if cfg.Provider != storage.ProviderLocal {
 		log.Printf("storage: using %s (account %q, folder %q)", cfg.Provider, cfg.Account, cfg.Folder)
 	} else {
@@ -88,10 +88,32 @@ func (s *Server) initStorage() error {
 	return nil
 }
 
-func (s *Server) setBackend(b storage.Backend) {
+func (s *Server) setBackend(b storage.Backend, cfg storage.Config) {
 	s.storageMu.Lock()
 	s.storageActive = b
+	s.storageBackendID = backendID(cfg)
 	s.storageMu.Unlock()
+}
+
+// backendKey returns the identifier of the active backend, used to scope
+// the blob dedup index and snapshot set. Blobs and snapshots recorded under
+// one backend are invisible to another, so switching backends starts a
+// clean namespace (and the first backup re-uploads everything).
+func (s *Server) backendKey() string {
+	s.storageMu.RLock()
+	defer s.storageMu.RUnlock()
+	return s.storageBackendID
+}
+
+// backendID derives a stable identifier for a storage configuration.
+func backendID(cfg storage.Config) string {
+	switch cfg.Provider {
+	case "", storage.ProviderLocal:
+		return "local"
+	default:
+		// provider + account + folder distinguishes distinct destinations.
+		return string(cfg.Provider) + "/" + cfg.Account + "/" + cfg.Folder
+	}
 }
 
 // applyStorageConfig validates, persists and activates a new configuration.
@@ -106,7 +128,7 @@ func (s *Server) applyStorageConfig(cfg storage.Config) error {
 	if err := s.saveStorageConfig(cfg); err != nil {
 		return err
 	}
-	s.setBackend(backend)
+	s.setBackend(backend, cfg)
 	log.Printf("storage: switched to %s", cfg.Provider)
 	return nil
 }

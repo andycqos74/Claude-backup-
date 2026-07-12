@@ -55,10 +55,12 @@ type Server struct {
 	fingerprint string
 	tlsCert     tls.Certificate
 
-	// storageMu guards the active backend, which can be swapped at runtime
-	// when the admin changes the storage provider. Read it via backend().
-	storageMu     sync.RWMutex
-	storageActive storage.Backend
+	// storageMu guards the active backend and its ID, which can be swapped
+	// at runtime when the admin changes the storage provider. Read them via
+	// backend() and backendKey().
+	storageMu        sync.RWMutex
+	storageActive    storage.Backend
+	storageBackendID string
 
 	// commitMu serialises snapshot commits against garbage collection:
 	// commits take the read lock, GC takes the write lock.

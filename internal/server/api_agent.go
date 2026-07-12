@@ -195,7 +195,7 @@ func (s *Server) handleBlobCheck(w http.ResponseWriter, r *http.Request, agentID
 			return
 		}
 	}
-	missing, err := s.store.MissingBlobs(req.Hashes)
+	missing, err := s.store.MissingBlobs(s.backendKey(), req.Hashes)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -212,7 +212,7 @@ func (s *Server) handleBlobPut(w http.ResponseWriter, r *http.Request, agentID s
 		httpError(w, http.StatusBadRequest, "invalid hash")
 		return
 	}
-	if ok, _ := s.store.HasBlob(hash); ok {
+	if ok, _ := s.store.HasBlob(s.backendKey(), hash); ok {
 		io.Copy(io.Discard, r.Body)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
@@ -254,7 +254,7 @@ func (s *Server) handleBlobPut(w http.ResponseWriter, r *http.Request, agentID s
 		httpError(w, http.StatusBadRequest, "content hash mismatch")
 		return
 	}
-	if err := s.store.AddBlob(hash, rawSize, stored); err != nil {
+	if err := s.store.AddBlob(s.backendKey(), hash, rawSize, stored); err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -307,7 +307,7 @@ func (s *Server) handleSnapshotCommit(w http.ResponseWriter, r *http.Request, ag
 		return
 	}
 	err = s.store.CreateSnapshot(store.Snapshot{
-		ID: snapID, JobID: jobID, AgentID: agentID, RunID: runID,
+		ID: snapID, Backend: s.backendKey(), JobID: jobID, AgentID: agentID, RunID: runID,
 		Mode: mode, Files: files, Bytes: bytes, ManifestKey: key,
 	})
 	if err != nil {

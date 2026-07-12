@@ -199,7 +199,8 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // snapshots (manifests deleted now, blob data on next GC).
 func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	snaps, err := s.store.ListSnapshots(id, "")
+	// Deleting a client removes its snapshots across every backend.
+	snaps, err := s.store.ListSnapshots("", id, "")
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -395,7 +396,9 @@ func (s *Server) handleRunCancel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSnapshotsList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	snaps, err := s.store.ListSnapshots(q.Get("agent"), q.Get("job"))
+	// Only snapshots stored in the active backend are browsable/restorable
+	// (their manifests and blobs live there).
+	snaps, err := s.store.ListSnapshots(s.backendKey(), q.Get("agent"), q.Get("job"))
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -513,7 +516,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	stats, err := s.store.Stats()
+	stats, err := s.store.Stats(s.backendKey())
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -526,7 +529,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	stats, _ := s.store.Stats()
+	stats, _ := s.store.Stats(s.backendKey())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"fingerprint": s.fingerprint,
 		"stats":       stats,

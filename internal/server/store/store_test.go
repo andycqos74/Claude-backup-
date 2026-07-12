@@ -1,12 +1,19 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"centralbackup/internal/proto"
 )
+
+// sqlOpenOld opens a raw sqlite handle (driver registered by the package's
+// blank import) for constructing a pre-migration database in tests.
+func sqlOpenOld(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", path)
+}
 
 func openTest(t *testing.T) *Store {
 	t.Helper()
@@ -122,7 +129,7 @@ func TestRunsAndSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateSnapshot(Snapshot{ID: "s1", JobID: "j1", AgentID: "a1", RunID: runID, Mode: proto.ModeFull, Files: 3, Bytes: 100, ManifestKey: "manifests/s1"}); err != nil {
+	if err := s.CreateSnapshot(Snapshot{ID: "s1", Backend: "local", JobID: "j1", AgentID: "a1", RunID: runID, Mode: proto.ModeFull, Files: 3, Bytes: 100, ManifestKey: "manifests/s1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.FinishRun(runID, proto.RunSuccess, "s1", "", proto.RunStats{FilesTotal: 3}); err != nil {
@@ -132,9 +139,13 @@ func TestRunsAndSnapshots(t *testing.T) {
 	if err != nil || run.Status != proto.RunSuccess || run.SnapshotID != "s1" {
 		t.Fatalf("GetRun: %+v %v", run, err)
 	}
-	latest, err := s.LatestSnapshot("j1")
+	latest, err := s.LatestSnapshot("local", "j1")
 	if err != nil || latest.ID != "s1" {
 		t.Fatalf("LatestSnapshot: %+v %v", latest, err)
+	}
+	// A different backend has no snapshot for this job yet.
+	if _, err := s.LatestSnapshot("onedrive/x/y", "j1"); err != ErrNotFound {
+		t.Fatalf("LatestSnapshot on empty backend: want ErrNotFound, got %v", err)
 	}
 
 	// Disconnect fails running runs but preserves queued ones.
@@ -153,20 +164,103 @@ func TestRunsAndSnapshots(t *testing.T) {
 	}
 }
 
-func TestBlobs(t *testing.T) {
-	s := openTest(t)
-	if err := s.AddBlob("h1", 10, 5); err != nil {
+// TestMigrateBackendScoping verifies that an existing pre-scoping database
+// (blobs keyed by hash only, snapshots without a backend column) upgrades
+// cleanly, with existing rows assigned to the 'local' backend.
+func TestMigrateBackendScoping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Build an old-schema DB directly, then let Open() migrate it.
+	raw, err := sqlOpenOld(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddBlob("h1", 10, 5); err != nil {
+	if _, err := raw.Exec(`
+		CREATE TABLE blobs (hash TEXT PRIMARY KEY, size_raw INTEGER NOT NULL, size_stored INTEGER NOT NULL, created_at INTEGER NOT NULL);
+		INSERT INTO blobs VALUES ('oldhash', 10, 5, 1);
+		CREATE TABLE snapshots (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, run_id TEXT NOT NULL DEFAULT '',
+			mode TEXT NOT NULL, files INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, manifest_key TEXT NOT NULL);
+		INSERT INTO snapshots (id, job_id, agent_id, mode, created_at, manifest_key) VALUES ('oldsnap', 'j1', 'a1', 'full', 1, 'manifests/oldsnap');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open (migrate) failed: %v", err)
+	}
+	defer s.Close()
+
+	// The pre-existing blob and snapshot must now belong to 'local'.
+	if ok, _ := s.HasBlob("local", "oldhash"); !ok {
+		t.Fatal("migrated blob not found under 'local' backend")
+	}
+	if ok, _ := s.HasBlob("onedrive/x/y", "oldhash"); ok {
+		t.Fatal("migrated blob must not appear under another backend")
+	}
+	snaps, err := s.ListSnapshots("local", "", "j1")
+	if err != nil || len(snaps) != 1 || snaps[0].ID != "oldsnap" {
+		t.Fatalf("migrated snapshot: %+v %v", snaps, err)
+	}
+	if snaps[0].Backend != "local" {
+		t.Fatalf("migrated snapshot backend = %q, want local", snaps[0].Backend)
+	}
+}
+
+func TestBlobs(t *testing.T) {
+	s := openTest(t)
+	if err := s.AddBlob("local", "h1", 10, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddBlob("local", "h1", 10, 5); err != nil {
 		t.Fatal("duplicate AddBlob must be a no-op, got", err)
 	}
-	missing, err := s.MissingBlobs([]string{"h1", "h2"})
+	missing, err := s.MissingBlobs("local", []string{"h1", "h2"})
 	if err != nil || len(missing) != 1 || missing[0] != "h2" {
 		t.Fatalf("MissingBlobs: %v %v", missing, err)
 	}
-	st, err := s.Stats()
+	st, err := s.Stats("local")
 	if err != nil || st.Blobs != 1 || st.SizeRaw != 10 || st.SizeStored != 5 {
 		t.Fatalf("Stats: %+v %v", st, err)
+	}
+}
+
+// TestBlobsPerBackend verifies the dedup index is scoped per backend: the
+// same hash tracked in one backend is absent (and must be re-uploaded) in
+// another. This is the fix for the "switch backend -> blob not found" bug.
+func TestBlobsPerBackend(t *testing.T) {
+	s := openTest(t)
+	if err := s.AddBlob("local", "h1", 10, 5); err != nil {
+		t.Fatal(err)
+	}
+	// Present in local...
+	if ok, _ := s.HasBlob("local", "h1"); !ok {
+		t.Fatal("h1 should be present in local")
+	}
+	// ...but not in a cloud backend, so it will be re-uploaded there.
+	if ok, _ := s.HasBlob("onedrive/acct/folder", "h1"); ok {
+		t.Fatal("h1 must NOT be considered present in a different backend")
+	}
+	missing, _ := s.MissingBlobs("onedrive/acct/folder", []string{"h1"})
+	if len(missing) != 1 || missing[0] != "h1" {
+		t.Fatalf("h1 should be missing in the cloud backend, got %v", missing)
+	}
+	// Same hash can be independently tracked in both backends.
+	if err := s.AddBlob("onedrive/acct/folder", "h1", 10, 5); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.HasBlob("onedrive/acct/folder", "h1"); !ok {
+		t.Fatal("h1 should now be present in the cloud backend")
+	}
+	// Deleting from one backend leaves the other intact.
+	if err := s.DeleteBlob("local", "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.HasBlob("local", "h1"); ok {
+		t.Fatal("h1 should be gone from local")
+	}
+	if ok, _ := s.HasBlob("onedrive/acct/folder", "h1"); !ok {
+		t.Fatal("h1 should still be present in the cloud backend")
 	}
 }
