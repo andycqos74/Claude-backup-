@@ -10,6 +10,9 @@
 <script src="/static/app.js"></script>
 </head>
 <body data-page="{{.Page}}" data-id="{{.ID}}">
+<!-- Toast lives at the top of the body so it exists before the inline page
+     scripts run (they execute during parse of <main> below). -->
+<div id="toast"></div>
 {{if and (ne .Page "login") (ne .Page "setup")}}
 <nav class="topnav">
   <a class="brand" href="/">⛁ Central Backup</a>
@@ -23,6 +26,5 @@
 <main class="container">
 {{block "content" .}}{{end}}
 </main>
-<div id="toast"></div>
 </body>
 </html>

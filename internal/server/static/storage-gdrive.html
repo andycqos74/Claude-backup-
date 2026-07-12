@@ -13,6 +13,15 @@
 app that <b>you</b> register once in Google Cloud. Your data stays in your
 Drive and no credentials are shared.</p>
 
+<div class="card" style="border-color:var(--warn)">
+<b>⚠ Your server needs a DNS hostname, not a bare IP address.</b>
+<p style="margin:.4rem 0 0">Google rejects redirect URIs that use a raw IP
+address — the redirect URL must use a hostname such as
+<code>https://backup.example.com:8443/…</code>. Point a domain (or a free
+dynamic-DNS name) at your server, set <code>CB_SERVER_NAME</code> to it,
+restart the server, and open the GUI via that hostname before connecting.</p>
+</div>
+
 <h2>1. Create a Google Cloud project + OAuth app</h2>
 <ol>
   <li>Open the <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create (or select) a project.</li>

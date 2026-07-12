@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -152,7 +154,15 @@ func (s *Server) handleStorageOAuthCallback(w http.ResponseWriter, r *http.Reque
 	}
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
-		s.oauthRedirectResult(w, r, "storage authorization failed: "+e)
+		// error_description carries the provider's actual reason (e.g. an
+		// AADSTS code from Microsoft), which is what makes this diagnosable.
+		desc := q.Get("error_description")
+		full := e
+		if desc != "" {
+			full = e + ": " + desc
+		}
+		log.Printf("storage OAuth authorization denied: %s", full)
+		s.oauthRedirectResult(w, r, "authorization failed — "+full)
 		return
 	}
 	code, state := q.Get("code"), q.Get("state")
@@ -258,7 +268,5 @@ func newOAuthState() string {
 }
 
 func urlQueryEscape(s string) string {
-	// Minimal escaping for the redirect query value.
-	repl := strings.NewReplacer(" ", "%20", "\"", "%22", "#", "%23", "&", "%26", "?", "%3F", "\n", " ")
-	return repl.Replace(s)
+	return url.QueryEscape(s)
 }

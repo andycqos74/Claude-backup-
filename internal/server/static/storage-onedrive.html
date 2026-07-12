@@ -14,6 +14,17 @@ OAuth app that <b>you</b> register once. This keeps your data in your
 tenant and avoids any shared credentials. It works for both personal
 OneDrive and OneDrive for Business (Microsoft 365).</p>
 
+<div class="card" style="border-color:var(--warn)">
+<b>⚠ Your server needs a DNS hostname, not a bare IP address.</b>
+<p style="margin:.4rem 0 0">Microsoft rejects redirect URIs that use a raw
+IP address (e.g. <code>https://87.106.150.130:8443/…</code>) — the
+authorization fails with <code>invalid_request</code>. The redirect URL
+must use a hostname such as <code>https://backup.example.com:8443/…</code>.
+Point a domain (or a free dynamic-DNS name) at your server, set
+<code>CB_SERVER_NAME</code> to it, restart the server, and open the GUI via
+that hostname before connecting. The same applies to Google Drive.</p>
+</div>
+
 <h2>1. Register an app in Azure</h2>
 <ol>
   <li>Go to the <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure app registrations</a> page (search "App registrations" in the Azure / Entra portal) and click <b>New registration</b>.</li>
