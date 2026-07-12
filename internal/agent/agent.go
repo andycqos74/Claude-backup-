@@ -57,6 +57,10 @@ func (a *Agent) endRun(runID string) {
 }
 
 func New(stateDir, configPath string) (*Agent, error) {
+	// On Windows this enables SeBackupPrivilege so the backup engine can
+	// read files/dirs whose ACLs deny the service account; no-op elsewhere.
+	enableBackupPrivilege()
+
 	creds, err := LoadCredentials(stateDir)
 	if err != nil {
 		return nil, err

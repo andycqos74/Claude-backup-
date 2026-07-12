@@ -135,34 +135,26 @@ func (a *Agent) scan(ctx context.Context, cmd proto.RunBackup, prev map[string]p
 			break
 		}
 		root = filepath.Clean(root)
-		rootInfo, err := os.Lstat(root)
-		if err != nil {
-			a.runLog(cmd.RunID, "warn", fmt.Sprintf("path %s: %v", root, err))
-			res.stats.FilesSkipped++
-			continue
-		}
-		walk := func(path string, d fs.DirEntry, walkErr error) error {
+		// walkBackup enumerates with OS backup semantics where available
+		// (on Windows this uses SeBackupPrivilege so files/dirs whose ACLs
+		// deny the service account are still readable); elsewhere it is a
+		// plain filepath.WalkDir.
+		walk := func(path string, info os.FileInfo, walkErr error) error {
 			if ctx.Err() != nil {
 				return filepath.SkipAll
 			}
 			if walkErr != nil {
 				a.runLog(cmd.RunID, "warn", fmt.Sprintf("%s: %v", path, walkErr))
 				res.stats.FilesSkipped++
-				if d != nil && d.IsDir() {
+				if info != nil && info.IsDir() {
 					return fs.SkipDir
 				}
 				return nil
 			}
 			if path != root && excluded(cmd.Job.Excludes, root, path) {
-				if d.IsDir() {
+				if info.IsDir() {
 					return fs.SkipDir
 				}
-				return nil
-			}
-			info, err := d.Info()
-			if err != nil {
-				a.runLog(cmd.RunID, "warn", fmt.Sprintf("%s: %v", path, err))
-				res.stats.FilesSkipped++
 				return nil
 			}
 			e := proto.ManifestEntry{
@@ -199,13 +191,8 @@ func (a *Agent) scan(ctx context.Context, cmd proto.RunBackup, prev map[string]p
 			progress.update(res.stats.FilesTotal, 0, res.stats.BytesTotal, 0)
 			return nil
 		}
-		if rootInfo.IsDir() {
-			if err := filepath.WalkDir(root, walk); err != nil {
-				return nil, err
-			}
-		} else {
-			d := fs.FileInfoToDirEntry(rootInfo)
-			walk(root, d, nil)
+		if err := walkBackup(root, walk); err != nil {
+			return nil, err
 		}
 	}
 
@@ -372,7 +359,7 @@ func (a *Agent) uploadFile(ctx context.Context, path, expectHash string) (rawByt
 		if ctx.Err() != nil {
 			return 0, "", ctx.Err()
 		}
-		f, err := os.Open(path)
+		f, err := openForBackup(path)
 		if err != nil {
 			return 0, "", fmt.Errorf("%s: %w", path, err)
 		}
@@ -562,7 +549,7 @@ func excluded(patterns []string, root, path string) bool {
 }
 
 func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := openForBackup(path)
 	if err != nil {
 		return "", err
 	}
