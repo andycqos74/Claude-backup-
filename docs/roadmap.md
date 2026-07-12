@@ -30,14 +30,37 @@ Planned enhancements, roughly in priority order.
      varies by provider (clean for OneDrive/Drive, awkward for Box).
    - Likely a per-provider capability with automatic fallback to the current
      proxied path when direct transfer isn't available.
-3. **Client-side encryption** — per-client or per-job keys, encrypt blobs
+3. **Real-time / continuous backup** — the agent watches a job's folders
+   (fsnotify: inotify on Linux, ReadDirectoryChangesW on Windows) and, after
+   a short debounce of quiescence, pushes changes as an incremental — closer
+   to one-way sync than scheduled backups. Design notes:
+   - *Phase 1 (reuses the engine):* a per-job `realtime` flag; on debounced
+     change, trigger the existing incremental for that job. Near-real-time
+     (changes captured seconds after they settle) with minimal new code.
+   - *Phase 2:* targeted "dirty-set" backups that process only the changed
+     paths and merge them into the previous manifest, avoiding a full tree
+     re-walk on large jobs.
+   - *Correctness safety net:* watchers can drop events under bursts
+     (inotify `IN_Q_OVERFLOW`, Windows buffer overflow) and inotify isn't
+     recursive, so real-time must supplement — not replace — a periodic full
+     scan that catches anything missed.
+   - *Cadence:* each debounced flush is a snapshot (cheap — blobs are shared
+     and only the manifest + changed blobs are new); rely on retention to
+     prune, and likely collapse the run history so live changes don't flood
+     it. Consider `realtime_debounce` and a min snapshot interval.
+4. **Schedule catch-up across server downtime** — today catch-up covers a
+   *client* being offline while the server is up (a missed occurrence runs on
+   reconnect). If the *server* is down at a scheduled time, that occurrence
+   isn't retroactively detected on restart. Persist each job's last scheduled
+   run and, on startup, fire catch-ups for anything overdue.
+5. **Client-side encryption** — per-client or per-job keys, encrypt blobs
    and manifests before upload so the server never sees plaintext.
-3. **Windows VSS** — snapshot volumes before reading so locked/open files
+6. **Windows VSS** — snapshot volumes before reading so locked/open files
    (databases, mailboxes) are captured consistently instead of skipped.
-4. **Bandwidth limits & windows** — per-agent upload throttling and
+7. **Bandwidth limits & windows** — per-agent upload throttling and
    allowed backup windows.
-5. **Notifications** — email/webhook on failed or missed runs.
-6. **Chunk-based deduplication** — content-defined chunking for large
+8. **Notifications** — email/webhook on failed or missed runs.
+9. **Chunk-based deduplication** — content-defined chunking for large
    frequently-modified files (VM images, mailbox files) so only changed
    chunks upload; the current file-level model stays for everything else.
-7. **Multi-admin / roles** and audit log.
+10. **Multi-admin / roles** and audit log.
