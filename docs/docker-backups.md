@@ -156,6 +156,41 @@ The same pattern works for other engines — e.g. PostgreSQL:
 docker exec db sh -c 'exec pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > /var/lib/backup-agent/staging/pg.sql
 ```
 
+### SQL Server (Microsoft SQL / Express)
+
+SQL Server can't stream a backup to stdout — `BACKUP DATABASE` writes a
+`.bak` **file**. Point it at the database's own volume and back that file up
+via `/host` (read-only reads are fine). `mssql-tools18`'s `sqlcmd` requires
+`-C` to trust the self-signed certificate. Backup **compression is not
+available in Express edition** — omit it (the agent's zstd compresses the
+`.bak` anyway).
+
+- **Paths:** `/host/var/lib/docker/volumes/<mssql-volume>/_data/backup/<db>.bak`
+- **Pre-hook:**
+  ```
+  docker exec <container> mkdir -p /var/opt/mssql/backup && docker exec <container> bash -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$MSSQL_SA_PASSWORD" -C -Q "BACKUP DATABASE [<db>] TO DISK='\''/var/opt/mssql/backup/<db>.bak'\'' WITH INIT, FORMAT"'
+  ```
+  `WITH INIT` overwrites the same file each run, so no post-hook cleanup is
+  needed. Repeat the `BACKUP DATABASE` for `master`/`msdb` if you want
+  logins and SQL-Agent jobs for full disaster recovery.
+- **Restore:** `RESTORE DATABASE [<db>] FROM DISK='/var/opt/mssql/backup/<db>.bak' WITH REPLACE`.
+
+### SQLite-backed apps (Vaultwarden, n8n, Portainer, …)
+
+Apps that keep a live SQLite/BoltDB in a volume (Vaultwarden's
+`db.sqlite3`, n8n's `.n8n/database.sqlite` — which also holds the critical
+`encryptionKey` — Portainer's `portainer.db`) can be backed up by copying
+the volume directly. A nightly hot copy is usually fine for low-write
+services, but not strictly guaranteed consistent. For guaranteed
+consistency give the service its own job with stop/start hooks (accept the
+brief downtime; fine for Vaultwarden, think twice for n8n if it runs
+scheduled workflows):
+
+```
+pre_hook:  docker stop <container>
+post_hook: docker start <container>
+```
+
 ---
 
 ## 6. Test and verify
