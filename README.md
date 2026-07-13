@@ -155,6 +155,8 @@ scripts/build-release.sh   # cross-compile server + agents into dist/
 ```
 
 See [docs/deployment.md](docs/deployment.md) for the deploy runbook,
+[docs/docker-backups.md](docs/docker-backups.md) for backing up a Docker
+host (volumes, bind mounts, database dumps),
 [docs/storage.md](docs/storage.md) for cloud storage backends,
 [docs/security.md](docs/security.md) for the security model,
 [docs/operations.md](docs/operations.md) for day-2 operations and
