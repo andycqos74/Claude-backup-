@@ -17,7 +17,12 @@
   <pre id="cmd-win" class="code"></pre>
   <h3>Docker host (containerized agent)</h3>
   <pre id="cmd-docker" class="code"></pre>
-  <p class="muted">Expected TLS fingerprint: <code id="token-fp"></code></p>
+  <p class="muted">Server address: <code id="token-base"></code><br>
+    Expected TLS fingerprint: <code id="token-fp"></code></p>
+  <p id="token-base-warn" class="muted" hidden style="margin:.2rem 0">
+    This differs from the address you are browsing with, because
+    <code>CB_PUBLIC_URL</code> is set. The command above is the correct one —
+    it is what the client must be able to reach.</p>
   <button class="btn" onclick="el('token-dlg').close()">Close</button>
 </dialog>
 <script>
@@ -31,7 +36,12 @@ async function load() {
 }
 async function newToken() {
   const t = await api('POST', '/api/admin/tokens', {note: ''});
-  const base = location.origin;
+  // Prefer the server's configured public URL (CB_PUBLIC_URL). Falling back
+  // to location.origin means enrolling while browsing by IP would hand the
+  // agent that IP, which then fails against a hostname-only deployment.
+  const base = t.base_url || location.origin;
+  el('token-base').textContent = base;
+  el('token-base-warn').hidden = base === location.origin;
   el('cmd-linux').textContent =
     `curl -fsSLk ${base}/static/install-agent.sh | sudo bash -s -- --server ${base} --token ${t.token} --fingerprint ${t.fingerprint}`;
   // Bypasses cert validation only to fetch the script over the self-signed

@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"centralbackup/internal/server/store"
 	"centralbackup/internal/server/storage"
+	"centralbackup/internal/server/store"
 )
 
 type Config struct {
@@ -24,6 +24,7 @@ type Config struct {
 	DataDir    string // sqlite db, tls certs
 	StorageDir string // blob/manifest storage root (localfs backend)
 	ServerName string // comma-separated extra SANs for the generated cert
+	PublicURL  string // externally reachable origin, e.g. https://backup.example.com:8443
 	CertFile   string // optional externally provided cert
 	KeyFile    string
 	AgentBins  string // directory of prebuilt agent binaries served at /dl/
@@ -42,6 +43,7 @@ func ConfigFromEnv() Config {
 		DataDir:    dataDir,
 		StorageDir: get("CB_STORAGE_DIR", filepath.Join(dataDir, "storage")),
 		ServerName: get("CB_SERVER_NAME", ""),
+		PublicURL:  get("CB_PUBLIC_URL", ""),
 		CertFile:   get("CB_TLS_CERT", ""),
 		KeyFile:    get("CB_TLS_KEY", ""),
 		AgentBins:  get("CB_AGENT_BIN_DIR", "./agents"),
@@ -80,6 +82,14 @@ func (s *Server) backend() storage.Backend {
 }
 
 func New(cfg Config) (*Server, error) {
+	// Validate before touching disk so a typo fails fast and loudly rather
+	// than silently producing unusable enrollment commands.
+	publicURL, err := normalizePublicURL(cfg.PublicURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.PublicURL = publicURL
+
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, err
 	}

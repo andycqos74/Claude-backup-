@@ -48,8 +48,9 @@
         <p id="storage-ip-warn" class="err" hidden style="margin:.2rem 0">
           ⚠ This is a bare IP address. Microsoft and Google reject IP
           redirect URLs — connecting will fail with “invalid_request”. Give
-          the server a DNS hostname (set <code>CB_SERVER_NAME</code>) and open
-          this page via that hostname first.</p></li>
+          the server a DNS hostname and set
+          <code>CB_PUBLIC_URL=https://your-host:8443</code>, which pins this
+          URL regardless of the address you browse with.</p></li>
       <li>Paste the app's Client ID and Secret below and save.</li>
       <li>Click <b>Connect</b> and sign in to authorise access.</li>
     </ol>

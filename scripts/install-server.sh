@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Docker-free server install for Ubuntu/Linux: builds the server binary from
 # this repo and installs it as a systemd service. Run from the repo root:
-#   sudo CB_SERVER_NAME=backup.example.com scripts/install-server.sh
+#   sudo CB_SERVER_NAME=backup.example.com \
+#        CB_PUBLIC_URL=https://backup.example.com:8443 scripts/install-server.sh
 #
 # Requires Go 1.25+ to build (only at install time). Prefer the Docker path
 # (deploy/docker-compose.yml) if you'd rather not install a toolchain.
@@ -14,6 +15,7 @@ command -v go >/dev/null || { echo "Go toolchain not found; install Go 1.25+ or 
 DATA_DIR="${CB_DATA_DIR:-/var/lib/backup-server}"
 LISTEN="${CB_LISTEN:-:8443}"
 SERVER_NAME="${CB_SERVER_NAME:-}"
+PUBLIC_URL="${CB_PUBLIC_URL:-}"
 
 echo "Building server binary..."
 CGO_ENABLED=0 go build -ldflags "-s -w -X centralbackup/internal/agent.Version=$(git describe --tags --always 2>/dev/null || echo dev)" \
@@ -41,6 +43,7 @@ Environment=CB_DATA_DIR=$DATA_DIR
 Environment=CB_LISTEN=$LISTEN
 Environment=CB_AGENT_BIN_DIR=$DATA_DIR/agents
 Environment=CB_SERVER_NAME=$SERVER_NAME
+Environment=CB_PUBLIC_URL=$PUBLIC_URL
 Restart=always
 RestartSec=5
 

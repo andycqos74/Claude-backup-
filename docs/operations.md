@@ -8,6 +8,7 @@
 | `CB_DATA_DIR` | `/data` (in Docker) | database, TLS cert, storage root |
 | `CB_STORAGE_DIR` | `$CB_DATA_DIR/storage` | blob/manifest storage |
 | `CB_SERVER_NAME` | – | extra SANs for the generated TLS certificate |
+| `CB_PUBLIC_URL` | – | externally reachable origin (e.g. `https://backup.example.com:8443`); pins the address used in enrollment commands and the OAuth redirect URL |
 | `CB_TLS_CERT` / `CB_TLS_KEY` | – | bring your own certificate |
 | `CB_AGENT_BIN_DIR` | `/app/agents` | prebuilt agent binaries served at `/dl/` |
 

@@ -228,6 +228,10 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"token":       token,
 		"fingerprint": s.fingerprint,
+		// The base URL the agent should connect back to. Sent by the server
+		// rather than taken from the browser's address bar so that enrolling
+		// while browsing by IP still produces a working command.
+		"base_url": s.publicBaseURL(r),
 	})
 }
 

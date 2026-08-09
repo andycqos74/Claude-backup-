@@ -16,6 +16,11 @@ services:
       # Extra DNS names / IPs for the generated TLS certificate
       # (set this to the public name agents will connect to).
       CB_SERVER_NAME: ${CB_SERVER_NAME:-}
+      # The externally reachable origin, e.g. https://backup.example.com:8443.
+      # Recommended: it pins the address baked into enrollment commands and
+      # the OAuth redirect URL, so browsing the GUI by IP can't mint a
+      # command pointing at that IP. Defaults to the browser's address.
+      CB_PUBLIC_URL: ${CB_PUBLIC_URL:-}
     volumes:
       # All state: database, TLS cert and backup storage.
       # Mount a large disk here (or bind-mount a path for /data/storage).

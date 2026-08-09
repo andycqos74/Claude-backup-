@@ -53,16 +53,25 @@ Requirements: Docker + Docker Compose on the machine that will hold backups.
 
 ```bash
 git clone <this repo> && cd <repo>
-CB_SERVER_NAME=backup.example.com docker compose -f deploy/docker-compose.yml up -d --build
+CB_SERVER_NAME=backup.example.com \
+CB_PUBLIC_URL=https://backup.example.com:8443 \
+  docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 - Open `https://<server>:8443` (the certificate is self-signed — that's
   expected) and create the admin account on first visit.
 - `CB_SERVER_NAME` should be the DNS name (or IP) agents will use.
+- `CB_PUBLIC_URL` is the address clients and OAuth providers will use. It's
+  optional but recommended: it pins the URL baked into enrollment commands
+  and the OAuth redirect, so browsing the GUI by IP can't generate a
+  command pointing at that IP.
 - All state lives in the `backup-data` volume (`/data`): SQLite database,
   TLS certificate and backup storage. Mount a big disk there.
 - Remote clients must be able to reach port 8443 on this machine — that is
-  the **only** port the whole system needs.
+  the **only** port the whole system needs. Reach it **directly**: agents
+  pin the server's certificate fingerprint, so a Cloudflare Tunnel or any
+  other TLS-terminating proxy in front of the server will break them. See
+  [docs/deployment.md](docs/deployment.md#3-reverse-proxies-tunnels-and-cloudflare).
 
 Prefer not to use Docker? The server is a single static binary — run
 `sudo CB_SERVER_NAME=… scripts/install-server.sh` for a systemd install

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"log"
 	"sync"
 
@@ -134,18 +133,10 @@ func (s *Server) applyStorageConfig(cfg storage.Config) error {
 }
 
 // oauthRedirectURL is where providers send the user back after consent.
+// This request-free form is used by background token refresh; the
+// request-scoped handlers use oauthRedirectURLFromRequest.
 func (s *Server) oauthRedirectURL() string {
-	host := s.cfg.ServerName
-	if i := indexByte(host, ','); i >= 0 {
-		host = host[:i]
-	}
-	if host == "" {
-		// Best effort: without a configured public name we can't know the
-		// externally reachable host here; the connect handler overrides
-		// this with the actual request Host, which is what matters.
-		host = "localhost"
-	}
-	return fmt.Sprintf("https://%s%s/api/admin/storage/oauth/callback", host, portSuffix(s.cfg.Listen))
+	return s.publicBaseURL(nil) + oauthCallbackPath
 }
 
 func indexByte(s string, b byte) int {

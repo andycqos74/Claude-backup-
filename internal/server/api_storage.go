@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -35,15 +34,15 @@ func (s *Server) registerStorageAPI(mux *http.ServeMux) {
 }
 
 type storageStatusJSON struct {
-	Provider     string `json:"provider"`
-	Connected    bool   `json:"connected"`
-	Account      string `json:"account,omitempty"`
-	Folder       string `json:"folder,omitempty"`
-	HasApp       bool   `json:"has_app"`       // client id/secret entered
-	ClientID     string `json:"client_id,omitempty"`
-	RedirectURL  string `json:"redirect_url"`  // to paste into the provider console
-	LocalDir     string `json:"local_dir,omitempty"`
-	SupportsCloud bool  `json:"supports_cloud"`
+	Provider      string `json:"provider"`
+	Connected     bool   `json:"connected"`
+	Account       string `json:"account,omitempty"`
+	Folder        string `json:"folder,omitempty"`
+	HasApp        bool   `json:"has_app"` // client id/secret entered
+	ClientID      string `json:"client_id,omitempty"`
+	RedirectURL   string `json:"redirect_url"` // to paste into the provider console
+	LocalDir      string `json:"local_dir,omitempty"`
+	SupportsCloud bool   `json:"supports_cloud"`
 }
 
 func (s *Server) handleStorageGet(w http.ResponseWriter, r *http.Request) {
@@ -254,15 +253,10 @@ func (s *Server) fetchAccountLabel(ctx context.Context, cfg storage.Config, acce
 	return ""
 }
 
-// oauthRedirectURLFromRequest derives the callback URL from the actual
-// request host, which is the externally reachable name the admin used —
-// more reliable than a configured value, and what the provider will echo.
+// oauthRedirectURLFromRequest is the callback URL to register with the
+// provider: CB_PUBLIC_URL when configured, otherwise the request's own host.
 func (s *Server) oauthRedirectURLFromRequest(r *http.Request, _ storage.Provider) string {
-	host := r.Host
-	if host == "" {
-		return s.oauthRedirectURL()
-	}
-	return fmt.Sprintf("https://%s/api/admin/storage/oauth/callback", host)
+	return s.publicBaseURL(r) + oauthCallbackPath
 }
 
 // clientIDMismatch catches the common mistake of pasting one provider's
