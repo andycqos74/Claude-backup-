@@ -125,10 +125,10 @@ type backupFileInfo struct {
 }
 
 func (fi backupFileInfo) Name() string       { return fi.name }
-func (fi backupFileInfo) Size() int64         { return fi.size }
-func (fi backupFileInfo) ModTime() time.Time  { return fi.mtime }
-func (fi backupFileInfo) Sys() any            { return nil }
-func (fi backupFileInfo) IsDir() bool         { return fi.attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 }
+func (fi backupFileInfo) Size() int64        { return fi.size }
+func (fi backupFileInfo) ModTime() time.Time { return fi.mtime }
+func (fi backupFileInfo) Sys() any           { return nil }
+func (fi backupFileInfo) IsDir() bool        { return fi.attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 }
 
 func (fi backupFileInfo) Mode() os.FileMode {
 	var m os.FileMode = 0o666

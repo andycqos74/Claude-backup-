@@ -111,7 +111,7 @@ type JobsUpdate struct {
 type RunBackup struct {
 	RunID          string `json:"run_id"`
 	Job            Job    `json:"job"`
-	Mode           string `json:"mode"`                      // full | incremental
+	Mode           string `json:"mode"`                       // full | incremental
 	PrevSnapshotID string `json:"prev_snapshot_id,omitempty"` // for incremental diff if local cache is missing
 }
 
@@ -119,7 +119,7 @@ type RunBackup struct {
 type Restore struct {
 	RunID      string   `json:"run_id"`
 	SnapshotID string   `json:"snapshot_id"`
-	Paths      []string `json:"paths,omitempty"`  // path prefixes to restore; empty = everything
+	Paths      []string `json:"paths,omitempty"`      // path prefixes to restore; empty = everything
 	TargetDir  string   `json:"target_dir,omitempty"` // empty = original locations
 	Overwrite  bool     `json:"overwrite"`
 }
@@ -170,7 +170,7 @@ type RunDone struct {
 // ManifestEntry is one line of a snapshot manifest (JSONL, zstd-compressed
 // at rest). Paths are absolute, exactly as seen on the client.
 type ManifestEntry struct {
-	Type   string `json:"t"`            // f | d | l
+	Type   string `json:"t"` // f | d | l
 	Path   string `json:"p"`
 	Size   int64  `json:"s,omitempty"`
 	Mode   uint32 `json:"m,omitempty"`

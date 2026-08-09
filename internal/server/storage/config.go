@@ -11,10 +11,10 @@ import (
 type Provider string
 
 const (
-	ProviderLocal     Provider = "local"
-	ProviderOneDrive  Provider = "onedrive"
+	ProviderLocal       Provider = "local"
+	ProviderOneDrive    Provider = "onedrive"
 	ProviderGoogleDrive Provider = "gdrive"
-	ProviderBox       Provider = "box"
+	ProviderBox         Provider = "box"
 )
 
 // Config is the persisted storage configuration (stored as JSON in the

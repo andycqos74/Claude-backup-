@@ -18,10 +18,10 @@ import (
 // createUploadSession + chunked PUT, download, metadata (Has) and delete.
 type fakeGraph struct {
 	mu       sync.Mutex
-	files    map[string][]byte           // path -> content
-	sessions map[string]*fakeUpload      // session id -> in-progress upload
+	files    map[string][]byte      // path -> content
+	sessions map[string]*fakeUpload // session id -> in-progress upload
 	srv      *httptest.Server
-	failNext map[string]int              // path -> number of times to return 503 first
+	failNext map[string]int // path -> number of times to return 503 first
 }
 
 type fakeUpload struct {
