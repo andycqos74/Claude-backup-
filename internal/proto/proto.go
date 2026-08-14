@@ -24,18 +24,20 @@ func Wrap(msgType string, payload any) (Envelope, error) {
 // Message type constants.
 const (
 	// agent -> server
-	MsgHello       = "hello"
-	MsgJobsSync    = "jobs_sync"
-	MsgJobDelete   = "job_delete"
-	MsgRunProgress = "run_progress"
-	MsgRunLog      = "run_log"
-	MsgRunDone     = "run_done"
+	MsgHello           = "hello"
+	MsgJobsSync        = "jobs_sync"
+	MsgJobDelete       = "job_delete"
+	MsgRunProgress     = "run_progress"
+	MsgRunLog          = "run_log"
+	MsgRunDone         = "run_done"
+	MsgDockerInventory = "docker_inventory"
 
 	// server -> agent
-	MsgJobsUpdate = "jobs_update"
-	MsgRunBackup  = "run_backup"
-	MsgRestore    = "restore"
-	MsgCancelRun  = "cancel_run"
+	MsgJobsUpdate     = "jobs_update"
+	MsgRunBackup      = "run_backup"
+	MsgRestore        = "restore"
+	MsgCancelRun      = "cancel_run"
+	MsgDiscoverDocker = "discover_docker"
 )
 
 // Run modes.
@@ -129,6 +131,57 @@ type Restore struct {
 // dropping the connection or leaving a half-committed snapshot.
 type CancelRun struct {
 	RunID string `json:"run_id"`
+}
+
+// DiscoverDocker asks the agent to enumerate the Docker containers on its
+// host, so the GUI can offer them as tick-boxes instead of hand-typed paths.
+type DiscoverDocker struct {
+	RequestID string `json:"request_id"`
+}
+
+// DockerMount is one volume or bind mount of a container. Source is the
+// path on the *host*; BackupPath is the same location as the agent would
+// have to address it in a job (prefixed with the host-root mount when the
+// agent is itself containerised), and is what a job should actually use.
+type DockerMount struct {
+	Type        string `json:"type"` // volume | bind
+	Name        string `json:"name,omitempty"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	BackupPath  string `json:"backup_path"`
+}
+
+// Container kinds. The GUI treats them differently because a live database
+// must be dumped, not file-copied.
+const (
+	DockerKindDatabase  = "database" // needs a dump hook
+	DockerKindEmbedded  = "embedded" // SQLite/BoltDB; copyable, better with stop/start
+	DockerKindFiles     = "files"    // plain files, copy directly
+	DockerKindStateless = "stateless"
+)
+
+// DockerContainer is one container as offered in the job editor.
+type DockerContainer struct {
+	Name    string        `json:"name"`
+	Image   string        `json:"image"`
+	Stack   string        `json:"stack,omitempty"`   // compose project, if any
+	Service string        `json:"service,omitempty"` // compose service, if any
+	State   string        `json:"state"`
+	Kind    string        `json:"kind"`
+	Engine  string        `json:"engine,omitempty"` // mysql | postgres | mssql | mongo | redis
+	Mounts  []DockerMount `json:"mounts,omitempty"`
+	// Note is a human-readable caveat shown next to the container, e.g.
+	// that its data directory does not look persisted.
+	Note string `json:"note,omitempty"`
+}
+
+// DockerInventory is the agent's answer to DiscoverDocker.
+type DockerInventory struct {
+	RequestID  string            `json:"request_id"`
+	Available  bool              `json:"available"` // false = no Docker socket reachable
+	Error      string            `json:"error,omitempty"`
+	HostRoot   string            `json:"host_root,omitempty"` // e.g. "/host" when containerised
+	Containers []DockerContainer `json:"containers,omitempty"`
 }
 
 // RunProgress is streamed while a run is in flight.

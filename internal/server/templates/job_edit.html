@@ -4,6 +4,21 @@
   <input type="hidden" name="id">
   <input type="hidden" name="agent_id">
   <label>Name <input name="name" required placeholder="e.g. documents"></label>
+  <div id="docker-panel" hidden>
+    <div class="row" style="align-items:baseline;justify-content:space-between">
+      <b>Docker containers on this client</b>
+      <button class="btn" type="button" onclick="DockerPicker.load(agentID, form, true)">Refresh</button>
+    </div>
+    <p class="muted" id="docker-hint" style="margin:.2rem 0">
+      Tick what to include — paths (and database dump hooks) are filled in
+      for you.</p>
+    <div id="docker-list"></div>
+    <p id="docker-db-warn" class="muted" hidden style="margin:.4rem 0">
+      Databases are dumped by a pre-hook rather than copied from their data
+      volume, because copying live database files gives an inconsistent
+      backup. Give each database its own job — one job can only carry one
+      pre-hook.</p>
+  </div>
   <label>Paths to back up (one per line)
     <textarea name="paths" rows="4" required placeholder="/home/user/documents&#10;C:\Data"></textarea></label>
   <label>Exclude patterns (one per line, glob)
@@ -35,6 +50,7 @@
     <button class="btn danger" type="button" id="del-btn" hidden onclick="delJob()">Delete job</button>
   </div>
 </form>
+<script src="/static/docker-picker.js"></script>
 <script>
 const jobID = document.body.dataset.id;
 const form = document.getElementById('job-form');
@@ -44,6 +60,7 @@ let agentID = params.get('agent') || '';
 async function load() {
   if (!jobID) {
     form.agent_id.value = agentID;
+    DockerPicker.load(agentID, form, false);
     return;
   }
   const jobs = await api('GET', '/api/admin/jobs');
@@ -65,6 +82,7 @@ async function load() {
   form.post_hook.value = j.post_hook || '';
   form.enabled.checked = j.enabled;
   form.catchup.checked = !!j.catchup;
+  DockerPicker.load(agentID, form, false);
 }
 form.addEventListener('submit', async (e) => {
   e.preventDefault();

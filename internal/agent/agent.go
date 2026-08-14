@@ -217,6 +217,15 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 			cancelFn()
 		}
 
+	case proto.MsgDiscoverDocker:
+		cmd, err := unmarshalMsg[proto.DiscoverDocker](env.Data)
+		if err != nil {
+			log.Printf("bad discover_docker message: %v", err)
+			return
+		}
+		// Read-only and quick, but it must not block the socket read loop.
+		go a.handleDiscoverDocker(cmd)
+
 	default:
 		log.Printf("unknown message type %q", env.Type)
 	}

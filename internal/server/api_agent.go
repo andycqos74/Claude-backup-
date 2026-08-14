@@ -170,6 +170,14 @@ func (s *Server) handleAgentMessage(agentID string, env proto.Envelope) error {
 		s.store.TouchAgent(agentID, nil)
 		return s.store.FinishRun(d.RunID, d.Status, d.SnapshotID, d.Error, d.Stats)
 
+	case proto.MsgDockerInventory:
+		inv, err := unmarshal[proto.DockerInventory](env.Data)
+		if err != nil {
+			return err
+		}
+		s.docker.deliver(inv)
+		return nil
+
 	default:
 		log.Printf("agent %s: unknown message type %q", agentID, env.Type)
 		return nil

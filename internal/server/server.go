@@ -71,6 +71,10 @@ type Server struct {
 	// oauth holds the in-flight storage "connect" flow state.
 	oauth oauthFlow
 
+	// docker correlates in-flight container-discovery requests with the
+	// agent replies that answer them.
+	docker dockerDiscovery
+
 	web *webUI
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,6 +61,7 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/agents/{id}/rename", s.adminAuth(s.handleAgentRename))
 	mux.HandleFunc("DELETE /api/admin/agents/{id}", s.adminAuth(s.handleAgentDelete))
 	mux.HandleFunc("POST /api/admin/tokens", s.adminAuth(s.handleTokenCreate))
+	mux.HandleFunc("GET /api/admin/agents/{id}/docker", s.adminAuth(s.handleAgentDocker))
 	mux.HandleFunc("GET /api/admin/jobs", s.adminAuth(s.handleJobsList))
 	mux.HandleFunc("POST /api/admin/jobs", s.adminAuth(s.handleJobSave))
 	mux.HandleFunc("DELETE /api/admin/jobs/{id}", s.adminAuth(s.handleJobDelete))
@@ -233,6 +235,21 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 		// while browsing by IP still produces a working command.
 		"base_url": s.publicBaseURL(r),
 	})
+}
+
+// handleAgentDocker returns the container inventory of a Docker host client,
+// used by the job editor to offer containers as tick-boxes. Agents that
+// aren't Docker hosts answer with available:false, which the GUI treats as
+// "no picker", not an error.
+func (s *Server) handleAgentDocker(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	inv, err := s.discoverDocker(ctx, r.PathValue("id"))
+	if err != nil {
+		httpError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, inv)
 }
 
 // ---- jobs ----

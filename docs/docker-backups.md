@@ -6,8 +6,10 @@ are *how it sees host data* (the host filesystem is mounted read-only at
 `/host`) and *how it quiesces databases* (the Docker socket is mounted so
 pre-hooks can run `docker exec`).
 
-This guide goes from zero to a working set of jobs: non-database files, and
-a consistent MySQL dump.
+The quickest route is the **container picker** in the job editor (section
+3): tick the containers you want and the paths and database dump hooks are
+generated for you. The rest of this guide covers configuring the same jobs
+by hand, and what each recipe is doing.
 
 ---
 
@@ -52,7 +54,46 @@ compose file already mounts:
 
 ---
 
-## 3. Find what to back up
+## 3. Pick containers in the GUI (easiest path)
+
+Once the agent is connected, open the client → **New job**. If the client is
+a Docker host, the editor shows a **Docker containers on this client**
+panel listing every container, grouped by compose stack. Tick what you want
+and the job's paths — and, for databases, the dump hooks — are filled in for
+you. Nothing below this section is required unless you prefer to configure
+jobs by hand or want to understand what the picker generated.
+
+The picker classifies each container and behaves accordingly:
+
+| Shown as | What it does |
+|---|---|
+| **database — dumped** | Adds a pre-hook that dumps to `/var/lib/backup-agent/staging/` and backs up that file, never the live data volume. MySQL/MariaDB, PostgreSQL, MongoDB and Redis generate a complete hook; SQL Server generates a template with `DATABASE` to replace. |
+| **app database — copied** | SQLite/BoltDB apps (Vaultwarden, n8n, Portainer, Gitea, …). Adds the volume paths, plus an optional *stop the container during backup* tick-box for a guaranteed-consistent copy. |
+| **files** | Adds the volume and bind-mount paths directly. |
+| **no data to back up** | Greyed out — the container has no mounts, so there is nothing to capture. |
+
+Notes:
+
+- Paths are translated automatically: a containerised agent gets
+  `/host/...` prefixes, a native agent gets plain host paths.
+- **One database per job.** A job carries a single pre-hook, so ticking one
+  database locks out the others. Give each database its own job.
+- The Docker socket mount is never offered as a path — it is a control
+  channel, not data.
+- A container whose image is known to store data in a specific directory
+  (e.g. Portainer's `/data`) that **no mount covers** is flagged in red:
+  that container is not persisting its state at all, and backing up its
+  volume would silently capture nothing.
+- The list is read live from the client each time the editor opens, so new
+  containers appear without touching the server. **Refresh** re-reads it.
+- The picker only appears for online clients with a reachable Docker
+  socket; everyone else just sees the normal path fields.
+
+Requirements: the agent needs the Docker socket (the compose file in step 1
+already mounts it). It is read-only usage — the agent only calls
+`GET /containers/json`.
+
+## 4. Find what to back up (manually)
 
 `/host` exists **only inside the agent container**. Over SSH you use the
 real host path; in a job you prepend `/host`.
@@ -88,7 +129,7 @@ docker exec backup-agent ls -la /host/opt/stacks/myapp
 
 ---
 
-## 4. Non-database files job
+## 5. Non-database files job
 
 Back up stack definitions, bind-mounted app dirs, and **non-database**
 named volumes (static content, uploads, config) directly.
@@ -112,7 +153,7 @@ live consistency needs (Redis persistence, Elasticsearch, etc.).
 
 ---
 
-## 5. Database job (MySQL example)
+## 6. Database job (MySQL example)
 
 Dump the database to a consistent `.sql` file with a **pre-hook**, then back
 up that file. The dump runs *inside* the database container, so its password
@@ -193,14 +234,14 @@ post_hook: docker start <container>
 
 ---
 
-## 6. Test and verify
+## 7. Test and verify
 
 1. **Back up now** on the job; check the run log shows the pre-hook running,
    `1 file` backed up, status **success**.
 2. Open the resulting snapshot → **Browse / restore** and confirm the file
    is there (download it and check a MySQL dump starts with `-- MySQL dump`).
 
-## 7. Restore
+## 8. Restore
 
 - **Files:** browse a snapshot and download, or restore to a writable
   directory. Because `/host` is mounted **read-only**, the agent can't write

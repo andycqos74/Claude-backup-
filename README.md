@@ -41,7 +41,11 @@ compressed and deduplicated, stored on the server's local storage.
 - **Retention** per job (keep last N / newer than N days) with automatic
   garbage collection.
 - **Docker-aware**: containerized agent for Docker hosts with pre/post
-  hooks (e.g. `pg_dump` before backup) and host-volume access.
+  hooks (e.g. `pg_dump` before backup) and host-volume access. The job
+  editor lists the client's **containers as tick-boxes**, grouped by
+  compose stack, and fills in the paths — generating the dump hook for
+  recognised databases — so new containers can be added without looking up
+  volume paths.
 - **Pluggable storage backend**: store backups on the server's local disk,
   or in your own **OneDrive / OneDrive for Business** or **Google Drive**
   via an OAuth connect flow in the GUI (Box coming soon). See

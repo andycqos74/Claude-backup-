@@ -12,6 +12,12 @@
 | `CB_TLS_CERT` / `CB_TLS_KEY` | – | bring your own certificate |
 | `CB_AGENT_BIN_DIR` | `/app/agents` | prebuilt agent binaries served at `/dl/` |
 
+## Agent configuration (environment variables)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CB_DOCKER_SOCKET` | `/var/run/docker.sock` | Docker Engine socket used to list containers in the job editor |
+
 ## Backups of the backup server
 
 Snapshot the whole `/data` volume (SQLite db + `storage/`). The database

@@ -34,6 +34,13 @@ re-enrolling agents.
 - At enrollment the agent receives a permanent agent ID + 256-bit random
   secret; both are stored hashed (SHA-256) server-side and sent on every
   request. An agent can only touch its own runs, snapshots and manifests.
+- On a Docker host the agent reads the container list (`GET
+  /containers/json`) so the job editor can offer containers as tick-boxes.
+  Only container names, images, compose labels and mount paths leave the
+  host — never environment variables, which is where database passwords
+  live. Note that mounting the Docker socket into the agent is itself
+  equivalent to granting root on that host; that is inherent to running
+  `docker exec` pre-hooks, not new to container discovery.
 
 ## Admin authentication
 
