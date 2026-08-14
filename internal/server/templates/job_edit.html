@@ -13,6 +13,11 @@
       Tick what to include — paths (and database dump hooks) are filled in
       for you.</p>
     <div id="docker-list"></div>
+    <p id="docker-hooks-warn" class="muted" hidden style="margin:.4rem 0">
+      The hooks below have been edited by hand, so ticking containers no
+      longer rewrites them — your edits are kept. Paths still update.
+      <button class="btn" type="button" onclick="DockerPicker.regenerateHooks()">Regenerate hooks</button>
+    </p>
     <p id="docker-db-warn" class="muted" hidden style="margin:.4rem 0">
       Databases are dumped by a pre-hook rather than copied from their data
       volume, because copying live database files gives an inconsistent

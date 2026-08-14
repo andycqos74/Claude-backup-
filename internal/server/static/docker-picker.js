@@ -16,6 +16,9 @@ const DockerPicker = (() => {
   let inv = null;
   let form = null;
   let agentID = '';
+  // False once the hooks differ from what the picker would generate: the
+  // admin has edited them, so ticking must not overwrite their work.
+  let ownsHooks = true;
   // Paths this panel contributed, so they can be withdrawn on untick
   // without disturbing anything typed by hand.
   let added = new Set();
@@ -65,18 +68,12 @@ const DockerPicker = (() => {
       .filter(Boolean);
   }
 
-  // apply recomputes paths and hooks from the current tick state.
-  function apply() {
-    const sel = selected();
-
-    // Only one database per job: a job carries a single pre-hook, so the
-    // others are locked out rather than silently ignored.
+  // build derives the paths and hooks a selection implies. Pure: it reads
+  // the tick state but writes nothing, so it can also be used to work out
+  // whether a saved job's hooks are still the ones the picker would produce.
+  function build(sel) {
+    // Only one database per job: a job carries a single pre-hook.
     const dbs = sel.filter(c => c.kind === 'database' && dumpFor(c));
-    document.querySelectorAll('#docker-list input[data-db="1"]').forEach(i => {
-      i.disabled = dbs.length > 0 && i.dataset.name !== dbs[0].name;
-    });
-    el('docker-db-warn').hidden = dbs.length === 0;
-
     const paths = [], pre = [], post = [];
     let todo = false;
     for (const c of sel) {
@@ -90,24 +87,94 @@ const DockerPicker = (() => {
         continue;
       }
       for (const m of c.mounts || []) paths.push(m.backup_path);
-      if (document.querySelector(`#docker-list input[data-stop="${c.name}"]`)?.checked) {
+      if (document.querySelector(`#docker-list input[data-stop="${cssEscape(c.name)}"]`)?.checked) {
         pre.push(`docker stop ${c.name}`);
-        post.unshift(`docker start ${c.name}`); // restart first, cleanup after
+        post.unshift(`docker start ${c.name}`); // restart first, clean up after
+      }
+    }
+    return {paths, pre: pre.join(' && '), post: post.join(' && '), todo, dbs};
+  }
+
+  // apply recomputes paths — and, when the picker still owns them, hooks —
+  // from the current tick state.
+  function apply() {
+    const sel = selected();
+    const out = build(sel);
+
+    document.querySelectorAll('#docker-list input[data-db="1"]').forEach(i => {
+      i.disabled = out.dbs.length > 0 && i.dataset.name !== out.dbs[0].name;
+    });
+    el('docker-db-warn').hidden = out.dbs.length === 0;
+
+    // Withdraw only the lines this panel contributed, so hand-typed paths
+    // survive ticking and unticking.
+    const kept = form.paths.value.split('\n').map(s => s.trim())
+      .filter(s => s && !added.has(s));
+    form.paths.value = [...new Set([...kept, ...out.paths])].join('\n');
+    added = new Set(out.paths);
+
+    if (ownsHooks) {
+      form.pre_hook.value = out.pre;
+      form.post_hook.value = out.post;
+    }
+    el('docker-hooks-warn').hidden = ownsHooks;
+    el('docker-hint').innerHTML = out.todo
+      ? '⚠ Replace <code>DATABASE</code> in the pre-hook and in the path with the name of the database to back up.'
+      : 'Tick what to include — paths (and database dump hooks) are filled in for you.';
+  }
+
+  // regenerateHooks discards hand edits and takes ownership back.
+  function regenerateHooks() {
+    ownsHooks = true;
+    apply();
+  }
+
+  function cssEscape(s) { return String(s).replace(/["\\]/g, '\\$&'); }
+  function reEscape(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  // adopt ticks the containers a saved job already covers, so reopening a
+  // job shows its real state and containers can be added or removed without
+  // starting over.
+  //
+  // Databases are matched on the hook rather than the path: the generated
+  // SQL Server path contains a placeholder the admin replaces, so the path
+  // won't match, but `docker exec <name>` still will. File and app
+  // containers are matched on their paths all being present — a partial
+  // match means the job was hand-built and shouldn't be claimed.
+  function adopt() {
+    const paths = new Set(form.paths.value.split('\n').map(s => s.trim()).filter(Boolean));
+    const pre = form.pre_hook.value;
+
+    for (const c of inv.containers) {
+      const box = document.querySelector(`#docker-list input[data-name="${cssEscape(c.name)}"]`);
+      if (!box || box.disabled) continue;
+      const execRe = new RegExp(`docker exec ${reEscape(c.name)}(\\s|$)`);
+      if (c.kind === 'database') {
+        box.checked = execRe.test(pre) || new RegExp(`docker exec ${reEscape(c.name)} redis-cli`).test(pre);
+        continue;
+      }
+      const mine = (c.mounts || []).map(m => m.backup_path);
+      box.checked = mine.length > 0 && mine.every(p => paths.has(p));
+      if (box.checked) {
+        const stop = document.querySelector(`#docker-list input[data-stop="${cssEscape(c.name)}"]`);
+        if (stop) stop.checked = new RegExp(`docker stop ${reEscape(c.name)}(\\s|$)`).test(pre);
       }
     }
 
-    const kept = form.paths.value.split('\n').map(s => s.trim())
-      .filter(s => s && !added.has(s));
-    form.paths.value = [...new Set([...kept, ...paths])].join('\n');
-    added = new Set(paths);
+    // The picker only keeps writing the hooks if the saved ones are exactly
+    // what it would have produced. Anything else is a hand edit — an
+    // mssql database name filled in, an extra command appended — and must
+    // survive later ticking.
+    const out = build(selected());
+    ownsHooks = form.pre_hook.value.trim() === out.pre.trim() &&
+                form.post_hook.value.trim() === out.post.trim();
+    added = new Set(out.paths);
 
-    if (pre.length || post.length || sel.length) {
-      form.pre_hook.value = pre.join(' && ');
-      form.post_hook.value = post.join(' && ');
-    }
-    el('docker-hint').innerHTML = todo
-      ? '⚠ Replace <code>DATABASE</code> in the pre-hook and in the path with the name of the database to back up.'
-      : 'Tick what to include — paths (and database dump hooks) are filled in for you.';
+    document.querySelectorAll('#docker-list input[data-db="1"]').forEach(i => {
+      i.disabled = out.dbs.length > 0 && i.dataset.name !== out.dbs[0].name;
+    });
+    el('docker-db-warn').hidden = out.dbs.length === 0;
+    el('docker-hooks-warn').hidden = ownsHooks;
   }
 
   const KIND_LABEL = {
@@ -150,6 +217,7 @@ const DockerPicker = (() => {
     list.querySelectorAll('input[type=checkbox]').forEach(i => i.addEventListener('change', apply));
     el('docker-hint').hidden = false;
     el('docker-panel').hidden = false;
+    adopt();
   }
 
   // status shows a message in place of the container list. Failures have to
@@ -209,5 +277,5 @@ const DockerPicker = (() => {
     }
   }
 
-  return {load, _dumpFor: dumpFor};
+  return {load, regenerateHooks, _dumpFor: dumpFor};
 })();

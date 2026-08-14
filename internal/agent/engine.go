@@ -157,6 +157,13 @@ func (a *Agent) scan(ctx context.Context, cmd proto.RunBackup, prev map[string]p
 				}
 				return nil
 			}
+			// Kernel pseudo-filesystems hold no data worth storing and are
+			// largely unreadable; descending into one buries a run pointed
+			// at a filesystem root in thousands of permission errors.
+			if info.IsDir() && path != root && isPseudoFS(path) {
+				a.runLog(cmd.RunID, "info", path+": skipping kernel filesystem")
+				return fs.SkipDir
+			}
 			e := proto.ManifestEntry{
 				Path:  filepath.ToSlash(path),
 				Mode:  uint32(info.Mode().Perm()),

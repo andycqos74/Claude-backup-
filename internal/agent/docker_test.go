@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -223,5 +224,57 @@ func TestDockerInventoryWithoutSocket(t *testing.T) {
 	inv := dockerInventory(t.Context())
 	if inv.Available && len(inv.Containers) == 0 {
 		t.Error("Available should be false when no containers were read")
+	}
+}
+
+func TestDescribeContainerSkipsHostRootBind(t *testing.T) {
+	// The backup agent mounts / at /host so it can read the host's data.
+	// Offering that as a tick-box would mean "back up the entire
+	// filesystem", which walks /proc, /sys and /dev and buries the run in
+	// permission errors.
+	api := dockerAPIContainer{
+		Names: []string{"/backup-agent"},
+		Image: "centralbackup/agent",
+		Mounts: []struct {
+			Type        string `json:"Type"`
+			Name        string `json:"Name"`
+			Source      string `json:"Source"`
+			Destination string `json:"Destination"`
+		}{
+			mount("volume", "d", "/var/lib/docker/volumes/deploy_backup-agent-data/_data", "/var/lib/backup-agent"),
+			mount("bind", "", "/var/run/docker.sock", "/var/run/docker.sock"),
+			mount("bind", "", "/", "/host"),
+		},
+	}
+	got := describeContainer(api, "/host")
+	for _, m := range got.Mounts {
+		if m.Source == "/" || m.BackupPath == "/host" {
+			t.Fatalf("host-root bind was offered as a backup path: %+v", m)
+		}
+	}
+	if len(got.Mounts) != 1 || got.Mounts[0].Destination != "/var/lib/backup-agent" {
+		t.Errorf("mounts = %+v, want only the agent's own data volume", got.Mounts)
+	}
+}
+
+func TestIsPseudoFS(t *testing.T) {
+	if !isPseudoFS("/proc") {
+		t.Error("/proc should be recognised as a kernel filesystem")
+	}
+	if !isPseudoFS("/sys") {
+		t.Error("/sys should be recognised as a kernel filesystem")
+	}
+	// An ordinary directory — including one merely named "proc" — must not
+	// be skipped: the check is by filesystem type, not by name.
+	dir := t.TempDir()
+	if isPseudoFS(dir) {
+		t.Error("a temp dir must not be treated as a kernel filesystem")
+	}
+	named := filepath.Join(dir, "proc")
+	if err := os.MkdirAll(named, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if isPseudoFS(named) {
+		t.Error("a directory named 'proc' on a real filesystem must not be skipped")
 	}
 }

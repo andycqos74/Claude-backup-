@@ -202,6 +202,14 @@ func describeContainer(c dockerAPIContainer, hostRoot string) proto.DockerContai
 		if m.Destination == "/var/run/docker.sock" {
 			continue
 		}
+		// Never offer a host-root bind as a backup path. The backup agent
+		// itself mounts / at /host to read the host's data, so without this
+		// the picker would offer "back up the entire filesystem" as an
+		// innocuous-looking tick-box — which then walks /proc, /sys and
+		// /dev and buries the run in permission errors.
+		if m.Type == "bind" && path.Clean(m.Source) == "/" {
+			continue
+		}
 		out.Mounts = append(out.Mounts, proto.DockerMount{
 			Type:        m.Type,
 			Name:        m.Name,
