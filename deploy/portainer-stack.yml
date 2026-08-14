@@ -1,0 +1,61 @@
+# Central Backup — Portainer stack (pulls prebuilt images, no local build).
+#
+# Use this instead of docker-compose.yml / agent-docker-compose.yml when the
+# host is too small to compile the images, or when you want the stack
+# managed by Portainer. Images come from GHCR, built by
+# .github/workflows/images.yml.
+#
+# Portainer → Stacks → Add stack → Web editor, paste this, and set the
+# environment variables listed below.
+#
+# Required environment variables:
+#   CB_TAG          image tag to deploy, e.g. "main" or a branch name
+#   CB_SERVER_NAME  DNS name in the TLS certificate, e.g. backup.example.com
+#   CB_PUBLIC_URL   externally reachable origin, e.g. https://backup.example.com:8443
+#   CB_OWNER        GitHub owner the images were published under
+#
+# IMPORTANT — the volumes below are declared `external` on purpose. Compose
+# normally prefixes volume names with the stack name, so deploying this as a
+# differently named stack would silently create *empty* volumes and the
+# server would come up with no database, no certificate (a new fingerprint
+# breaks every enrolled agent) and no backups. Naming the existing volumes
+# explicitly makes the stack name irrelevant. Check yours first with
+# `docker volume ls | grep backup` and adjust the two `name:` fields if they
+# differ.
+
+services:
+  backup-server:
+    image: ghcr.io/${CB_OWNER}/centralbackup-server:${CB_TAG}
+    container_name: backup-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      CB_SERVER_NAME: ${CB_SERVER_NAME}
+      CB_PUBLIC_URL: ${CB_PUBLIC_URL}
+    volumes:
+      - backup-data:/data
+
+  backup-agent:
+    image: ghcr.io/${CB_OWNER}/centralbackup-agent:${CB_TAG}
+    container_name: backup-agent
+    restart: unless-stopped
+    environment:
+      # Only read on first enrollment; harmless to leave empty once the
+      # agent has credentials in its volume.
+      CB_SERVER: ${CB_SERVER:-}
+      CB_TOKEN: ${CB_TOKEN:-}
+      CB_FINGERPRINT: ${CB_FINGERPRINT:-}
+      CB_NAME: ${CB_NAME:-}
+    volumes:
+      - backup-agent-data:/var/lib/backup-agent
+      - /:/host:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  backup-data:
+    external: true
+    name: deploy_backup-data
+  backup-agent-data:
+    external: true
+    name: deploy_backup-agent-data

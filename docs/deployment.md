@@ -98,7 +98,35 @@ CB_SERVER_NAME=backup.example.com \
   mount a path to `/data/storage`).
 - Logs / fingerprint: `docker compose -f deploy/docker-compose.yml logs -f`.
 
-### Option B — Docker-free (systemd)
+### Option B — Portainer, pulling prebuilt images
+
+Building the image compiles the Go server plus three cross-compiled agent
+binaries. On a small VPS that is enough to exhaust RAM and get the build
+killed by the OOM reaper. It also doesn't work if the stack was created
+outside Portainer, which the UI marks as **limited** and refuses to edit.
+
+Both are solved by building in CI and deploying by pull:
+
+1. Push to GitHub. `.github/workflows/images.yml` builds and publishes
+   `ghcr.io/<owner>/centralbackup-server` and `…-agent`.
+2. Make the two packages **public** (GitHub → your profile → Packages →
+   each package → Package settings → Change visibility), or on the host run
+   `docker login ghcr.io -u <user> -p <PAT-with-read:packages>`.
+3. In Portainer: **Stacks → Add stack → Web editor**, paste
+   `deploy/portainer-stack.yml`, and set `CB_TAG`, `CB_OWNER`,
+   `CB_SERVER_NAME` and `CB_PUBLIC_URL` under *Environment variables*.
+
+To redeploy a new version afterwards: **Stacks → your stack → Update the
+stack**, with *Re-pull image* enabled. Nothing is compiled on the host.
+
+> **Volume names.** Compose prefixes volume names with the stack name, so
+> deploying under a new stack name would create *empty* volumes — the server
+> would start with no database, no certificate (a new fingerprint breaks
+> every enrolled agent) and no backups. `deploy/portainer-stack.yml`
+> therefore declares its volumes `external` with explicit names. Confirm
+> yours match with `docker volume ls | grep backup` before deploying.
+
+### Option C — Docker-free (systemd)
 
 If you'd rather not use Docker (or can't pull images), the server is a
 single static binary. With Go 1.25+ installed on the server host:
