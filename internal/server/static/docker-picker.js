@@ -148,25 +148,63 @@ const DockerPicker = (() => {
       list.appendChild(box);
     }
     list.querySelectorAll('input[type=checkbox]').forEach(i => i.addEventListener('change', apply));
+    el('docker-hint').hidden = false;
     el('docker-panel').hidden = false;
   }
 
-  // load fetches the client's container inventory. A client that isn't a
-  // Docker host simply gets no picker, so failures are only surfaced when
-  // the admin asked explicitly (the Refresh button).
+  // status shows a message in place of the container list. Failures have to
+  // be visible: hiding the whole panel on error leaves the admin with no
+  // feedback, no Refresh button and nothing to diagnose from.
+  function status(msg, isError) {
+    el('docker-panel').hidden = false;
+    el('docker-db-warn').hidden = true;
+    el('docker-hint').hidden = true;
+    el('docker-list').innerHTML =
+      `<p class="${isError ? 'err' : 'muted'}" style="margin:.3rem 0">${esc(msg)}</p>`;
+  }
+
+  // loadHint turns a failed discovery into the likely cause. Both common
+  // causes are version skew after an upgrade, which is otherwise invisible.
+  function loadHint(err) {
+    const m = String(err && err.message || err);
+    if (/did not respond in time/i.test(m)) {
+      return 'The client did not answer. This usually means the agent is older than the ' +
+        'server and does not understand container discovery yet — update the agent image ' +
+        'and redeploy it. (Its log will show: unknown message type "discover_docker".)';
+    }
+    if (/offline|could not reach/i.test(m)) {
+      return 'The client is offline, so its containers cannot be listed.';
+    }
+    return 'Could not list containers: ' + m;
+  }
+
+  // load fetches the client's container inventory. A client that genuinely
+  // isn't a Docker host gets no panel at all; anything that *failed* gets a
+  // visible explanation.
   async function load(id, f, explicit) {
     agentID = id || agentID;
     form = f || form;
     if (!agentID) return;
+    status('Looking for Docker containers on this client…', false);
     try {
       const got = await api('GET', `/api/admin/agents/${agentID}/docker`);
-      if (!got.available || !(got.containers || []).length) {
-        if (explicit) toast(got.error || 'No Docker containers found on this client');
+      if (got.available && (got.containers || []).length) {
+        inv = got;
+        render();
         return;
       }
-      inv = got;
-      render();
+      if (got.error) {
+        status('Docker could not be read on this client: ' + got.error, true);
+        return;
+      }
+      if (got.available) {
+        status('Docker is running on this client, but it has no containers.', false);
+        return;
+      }
+      // No Docker socket: an ordinary non-Docker client, so no panel.
+      el('docker-panel').hidden = true;
     } catch (err) {
+      status(loadHint(err), true);
       if (explicit) toast(err.message);
     }
   }
