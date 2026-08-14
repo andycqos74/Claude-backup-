@@ -1,6 +1,11 @@
 package agent
 
 import (
+	"io"
+	"net"
+	"net/http"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"centralbackup/internal/proto"
@@ -134,6 +139,81 @@ func TestPersistenceNoteFlagsUnmountedDataDir(t *testing.T) {
 	api.Mounts[0] = mount("volume", "v", "/var/lib/docker/volumes/v/_data", "/var/lib")
 	if note := describeContainer(api, "/host").Note; note != "" {
 		t.Errorf("a parent mount should count as covering the data dir, got: %s", note)
+	}
+}
+
+// serveFakeDocker starts a Docker-like API on a unix socket and points the
+// agent at it. It rejects versioned request paths the way Docker 25+ does,
+// so pinning an outdated API version fails the test rather than silently
+// working against a permissive double.
+func serveFakeDocker(t *testing.T, body string) {
+	t.Helper()
+	sock := filepath.Join(t.TempDir(), "docker.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v") {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"message":"client version is too old. Minimum supported API version is 1.44"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body)
+	})}
+	go srv.Serve(l)
+	t.Cleanup(func() { srv.Close() })
+
+	old := dockerSocket
+	dockerSocket = sock
+	t.Cleanup(func() { dockerSocket = old })
+}
+
+func TestDockerInventoryUsesUnversionedAPI(t *testing.T) {
+	serveFakeDocker(t, `[
+	  {"Names":["/db"],"Image":"mysql:8.4","State":"running",
+	   "Labels":{"com.docker.compose.project":"app"},
+	   "Mounts":[{"Type":"volume","Name":"d","Source":"/var/lib/docker/volumes/d/_data","Destination":"/var/lib/mysql"}]}
+	]`)
+
+	inv := dockerInventory(t.Context())
+	if !inv.Available {
+		t.Fatalf("inventory unavailable: %s", inv.Error)
+	}
+	if len(inv.Containers) != 1 {
+		t.Fatalf("containers = %d, want 1", len(inv.Containers))
+	}
+	c := inv.Containers[0]
+	if c.Name != "db" || c.Engine != "mysql" || c.Stack != "app" {
+		t.Errorf("container = %+v, want the mysql container in stack 'app'", c)
+	}
+}
+
+// A daemon error must surface as a message, not as an empty list that the
+// GUI would render as "this host has no containers".
+func TestDockerInventoryReportsAPIError(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "docker.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"message":"something went wrong"}`)
+	})}
+	go srv.Serve(l)
+	t.Cleanup(func() { srv.Close() })
+	old := dockerSocket
+	dockerSocket = sock
+	t.Cleanup(func() { dockerSocket = old })
+
+	inv := dockerInventory(t.Context())
+	if inv.Available {
+		t.Error("Available should be false when the daemon returned an error")
+	}
+	if !strings.Contains(inv.Error, "something went wrong") {
+		t.Errorf("Error = %q, want it to carry the daemon's message", inv.Error)
 	}
 }
 

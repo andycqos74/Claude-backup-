@@ -76,8 +76,14 @@ func dockerInventory(ctx context.Context) proto.DockerInventory {
 		return inv // Available stays false: not a Docker host, or socket not mounted
 	}
 
+	// Deliberately unversioned. Pinning a version ties us to a window the
+	// daemon still accepts: Docker 25 dropped everything below 1.44, so a
+	// pinned /v1.41/ fails with "client version is too old" on current
+	// hosts, while pinning something new breaks older ones. An unversioned
+	// path means "this daemon's current API", which every release accepts,
+	// and the handful of fields read below have been stable throughout.
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://docker/v1.41/containers/json?all=1", nil)
+		"http://docker/containers/json?all=1", nil)
 	if err != nil {
 		inv.Error = err.Error()
 		return inv
