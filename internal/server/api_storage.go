@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 func (s *Server) registerStorageAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/storage", s.adminAuth(s.handleStorageGet))
 	mux.HandleFunc("POST /api/admin/storage/local", s.adminAuth(s.handleStorageUseLocal))
+	mux.HandleFunc("POST /api/admin/storage/s3", s.adminAuth(s.handleStorageUseS3))
 	mux.HandleFunc("POST /api/admin/storage/app", s.adminAuth(s.handleStorageSetApp))
 	mux.HandleFunc("POST /api/admin/storage/connect", s.adminAuth(s.handleStorageConnect))
 	// The OAuth provider redirects the browser here (a top-level GET, so it
@@ -43,6 +46,14 @@ type storageStatusJSON struct {
 	RedirectURL   string `json:"redirect_url"` // to paste into the provider console
 	LocalDir      string `json:"local_dir,omitempty"`
 	SupportsCloud bool   `json:"supports_cloud"`
+
+	// S3 settings, echoed back to prefill the form. The secret key is
+	// deliberately never returned.
+	S3Endpoint  string `json:"s3_endpoint,omitempty"`
+	S3Region    string `json:"s3_region,omitempty"`
+	S3Bucket    string `json:"s3_bucket,omitempty"`
+	S3AccessKey string `json:"s3_access_key,omitempty"`
+	HasS3Secret bool   `json:"has_s3_secret"`
 }
 
 func (s *Server) handleStorageGet(w http.ResponseWriter, r *http.Request) {
@@ -50,13 +61,18 @@ func (s *Server) handleStorageGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, storageStatusJSON{
 		Provider:      string(cfg.Provider),
 		Connected:     cfg.Connected(),
-		Account:       cfg.Account,
+		Account:       storageAccountLabel(cfg),
 		Folder:        cfg.Folder,
 		HasApp:        cfg.ClientID != "" && cfg.ClientSecret != "",
 		ClientID:      cfg.ClientID,
 		RedirectURL:   s.oauthRedirectURLFromRequest(r, cfg.Provider),
 		LocalDir:      cfg.LocalDir,
 		SupportsCloud: true,
+		S3Endpoint:    cfg.S3Endpoint,
+		S3Region:      cfg.S3Region,
+		S3Bucket:      cfg.S3Bucket,
+		S3AccessKey:   cfg.S3AccessKey,
+		HasS3Secret:   cfg.S3SecretKey != "",
 	})
 }
 
@@ -67,6 +83,91 @@ func (s *Server) handleStorageUseLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleStorageUseS3 validates and activates an S3-compatible destination.
+// Unlike the OAuth providers there is no connect step: the credentials are
+// usable immediately, so the configuration is proved by a live round trip
+// before it is saved — a typo in the key or bucket is reported here rather
+// than surfacing as a failed backup hours later.
+func (s *Server) handleStorageUseS3(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeBody[struct {
+		Endpoint  string `json:"endpoint"`
+		Region    string `json:"region"`
+		Bucket    string `json:"bucket"`
+		AccessKey string `json:"access_key"`
+		SecretKey string `json:"secret_key"`
+		Folder    string `json:"folder"`
+	}](r)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+
+	cur := s.loadStorageConfig()
+	cfg := storage.Config{
+		Provider:    storage.ProviderS3,
+		S3Endpoint:  strings.TrimSpace(req.Endpoint),
+		S3Region:    strings.TrimSpace(req.Region),
+		S3Bucket:    strings.TrimSpace(req.Bucket),
+		S3AccessKey: strings.TrimSpace(req.AccessKey),
+		S3SecretKey: strings.TrimSpace(req.SecretKey),
+		Folder:      strings.Trim(strings.TrimSpace(req.Folder), "/"),
+	}
+	// An empty secret means "keep the stored one", so the GUI never has to
+	// echo it back to the browser.
+	if cfg.S3SecretKey == "" && cur.Provider == storage.ProviderS3 {
+		cfg.S3SecretKey = cur.S3SecretKey
+	}
+
+	backend, err := storage.NewS3(cfg)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := storageSelfTest(backend); err != nil {
+		httpError(w, http.StatusBadGateway, "could not write to the bucket: "+err.Error())
+		return
+	}
+	if err := s.applyStorageConfig(cfg); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// storageAccountLabel is the human-readable destination shown in the GUI.
+// S3 has no account to name, so its bucket serves the same purpose.
+func storageAccountLabel(cfg storage.Config) string {
+	if cfg.Provider == storage.ProviderS3 {
+		return cfg.S3Bucket
+	}
+	return cfg.Account
+}
+
+// storageSelfTest proves a backend can actually be written to, read back
+// from and deleted, using a throwaway key.
+func storageSelfTest(b storage.Backend) error {
+	key := "healthcheck/" + newOAuthState()
+	payload := []byte("central-backup connectivity check")
+	if _, err := b.Put(key, bytes.NewReader(payload)); err != nil {
+		return err
+	}
+	defer b.Delete(key)
+
+	rc, err := b.Get(key)
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	got, err := io.ReadAll(io.LimitReader(rc, int64(len(payload))+1))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, payload) {
+		return fmt.Errorf("data read back did not match what was written")
+	}
+	return nil
 }
 
 // handleStorageSetApp stores the provider + OAuth app credentials (client

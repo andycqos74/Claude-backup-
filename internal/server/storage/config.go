@@ -12,6 +12,7 @@ type Provider string
 
 const (
 	ProviderLocal       Provider = "local"
+	ProviderS3          Provider = "s3"
 	ProviderOneDrive    Provider = "onedrive"
 	ProviderGoogleDrive Provider = "gdrive"
 	ProviderBox         Provider = "box"
@@ -43,11 +44,27 @@ type Config struct {
 	// Account is a human-readable label for the connected account (email /
 	// display name), shown in the GUI. Set during the OAuth flow.
 	Account string `json:"account,omitempty"`
+
+	// S3-compatible object storage (Backblaze B2, Wasabi, R2, MinIO, …).
+	// No OAuth: these are entered once and used directly.
+	S3Endpoint  string `json:"s3_endpoint,omitempty"`
+	S3Region    string `json:"s3_region,omitempty"`
+	S3Bucket    string `json:"s3_bucket,omitempty"`
+	S3AccessKey string `json:"s3_access_key,omitempty"`
+	S3SecretKey string `json:"s3_secret_key,omitempty"`
 }
 
 // Connected reports whether a cloud provider has completed OAuth.
 func (c Config) Connected() bool {
-	return c.Provider == ProviderLocal || c.RefreshToken != ""
+	switch c.Provider {
+	case ProviderLocal:
+		return true
+	case ProviderS3:
+		// S3 has no consent step: having the key pair is being connected.
+		return c.S3Endpoint != "" && c.S3Bucket != "" && c.S3AccessKey != "" && c.S3SecretKey != ""
+	default:
+		return c.RefreshToken != ""
+	}
 }
 
 // TokenSourceFunc yields a valid, refreshed OAuth bearer token on demand.
@@ -71,6 +88,9 @@ func Build(cfg Config, token TokenSourceFunc, httpClient *http.Client) (Backend,
 			return nil, fmt.Errorf("local storage directory is not set")
 		}
 		return NewLocalFS(dir)
+	case ProviderS3:
+		// No OAuth: S3 authenticates each request with the key pair.
+		return NewS3(cfg)
 	case ProviderOneDrive:
 		if token == nil {
 			return nil, fmt.Errorf("onedrive backend requires a token source")

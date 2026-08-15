@@ -46,9 +46,10 @@ compressed and deduplicated, stored on the server's local storage.
   compose stack, and fills in the paths — generating the dump hook for
   recognised databases — so new containers can be added without looking up
   volume paths.
-- **Pluggable storage backend**: store backups on the server's local disk,
-  or in your own **OneDrive / OneDrive for Business** or **Google Drive**
-  via an OAuth connect flow in the GUI (Box coming soon). See
+- **Pluggable storage backend**: the server's local disk, any
+  **S3-compatible** provider (Backblaze B2, Wasabi, Cloudflare R2, MinIO,
+  Storj — endpoint, bucket and a key pair, no app registration), or your own
+  **OneDrive** via an OAuth connect flow in the GUI. See
   [docs/storage.md](docs/storage.md).
 
 ## Quick start — server

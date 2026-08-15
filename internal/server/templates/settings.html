@@ -27,9 +27,8 @@
   <label>Provider
     <select id="storage-provider">
       <option value="local">Local disk (on the server)</option>
+      <option value="s3">S3-compatible (Backblaze B2, Wasabi, R2, MinIO…)</option>
       <option value="onedrive">OneDrive / OneDrive for Business</option>
-      <option value="gdrive">Google Drive</option>
-      <option value="box" disabled>Box (coming soon)</option>
     </select>
   </label>
 
@@ -37,6 +36,25 @@
     <p class="muted">Backups are stored on the server's local disk (the
     <code>/data</code> volume). This is the default.</p>
     <button class="btn primary" onclick="useLocal()">Use local disk</button>
+  </div>
+
+  <div id="storage-s3" hidden>
+    <p class="muted">Works with any S3-compatible provider. There is no app to
+      register and no sign-in flow — create a bucket and an application key,
+      paste them here, and the settings are verified by writing and reading
+      back a test object before they are saved.</p>
+    <label>Endpoint <input id="s3-endpoint" autocomplete="off"
+      placeholder="https://s3.us-west-002.backblazeb2.com"></label>
+    <div class="row">
+      <label>Bucket <input id="s3-bucket" autocomplete="off" placeholder="my-backups"></label>
+      <label>Region <input id="s3-region" autocomplete="off" placeholder="us-east-1 (default)"></label>
+    </div>
+    <label>Access key ID <input id="s3-access" autocomplete="off"></label>
+    <label>Secret access key <input id="s3-secret" type="password" autocomplete="off" placeholder="(unchanged)"></label>
+    <label>Folder / key prefix <input id="s3-folder" placeholder="central-backup"></label>
+    <div class="row">
+      <button class="btn primary" onclick="saveS3()">Test and use this bucket</button>
+    </div>
   </div>
 
   <div id="storage-cloud" hidden>
@@ -74,12 +92,27 @@
 <script>
 const STORAGE_HELP = {
   onedrive: '/static/storage-onedrive.html',
-  gdrive: '/static/storage-gdrive.html',
-  box: '/static/storage-box.html',
 };
 const PROVIDER_LABEL = {
-  local: 'Local disk', onedrive: 'OneDrive', gdrive: 'Google Drive', box: 'Box',
+  local: 'Local disk', s3: 'S3-compatible', onedrive: 'OneDrive',
+  gdrive: 'Google Drive (no longer offered)', box: 'Box',
 };
+
+async function saveS3() {
+  try {
+    await api('POST', '/api/admin/storage/s3', {
+      endpoint: el('s3-endpoint').value.trim(),
+      region: el('s3-region').value.trim(),
+      bucket: el('s3-bucket').value.trim(),
+      access_key: el('s3-access').value.trim(),
+      secret_key: el('s3-secret').value,
+      folder: el('s3-folder').value.trim(),
+    });
+    toast('Bucket verified and now in use');
+    el('s3-secret').value = '';
+    await loadStorage();
+  } catch (err) { toast(err.message); }
+}
 
 async function load() {
   const d = await api('GET', '/api/admin/settings');
@@ -118,6 +151,13 @@ async function loadStorage() {
   if (el('storage-provider').value === s.provider) {
     el('storage-client-id').value = s.client_id || '';
     el('storage-folder').value = s.folder || '';
+    if (s.provider === 's3') {
+      el('s3-endpoint').value = s.s3_endpoint || '';
+      el('s3-region').value = s.s3_region || '';
+      el('s3-bucket').value = s.s3_bucket || '';
+      el('s3-access').value = s.s3_access_key || '';
+      el('s3-folder').value = s.folder || '';
+    }
   } else {
     el('storage-client-id').value = '';
     el('storage-folder').value = '';
@@ -131,8 +171,10 @@ async function loadStorage() {
 function renderStorageProvider() {
   const p = el('storage-provider').value;
   el('storage-local').hidden = p !== 'local';
-  el('storage-cloud').hidden = p === 'local';
-  if (p !== 'local') el('storage-help').href = STORAGE_HELP[p] || '#';
+  el('storage-s3').hidden = p !== 's3';
+  // Only the OAuth providers get the app-registration panel.
+  el('storage-cloud').hidden = p === 'local' || p === 's3';
+  if (STORAGE_HELP[p]) el('storage-help').href = STORAGE_HELP[p];
 }
 el('storage-provider').addEventListener('change', () => {
   const p = el('storage-provider').value;

@@ -54,7 +54,7 @@ func (s *Server) saveStorageConfig(cfg storage.Config) error {
 // source for cloud providers.
 func (s *Server) buildBackend(cfg storage.Config) (storage.Backend, error) {
 	var token storage.TokenSourceFunc
-	if cfg.Provider != storage.ProviderLocal {
+	if cfg.Provider != storage.ProviderLocal && cfg.Provider != storage.ProviderS3 {
 		ts, err := s.storageTokenSource(cfg)
 		if err != nil {
 			return nil, err
@@ -109,6 +109,10 @@ func backendID(cfg storage.Config) string {
 	switch cfg.Provider {
 	case "", storage.ProviderLocal:
 		return "local"
+	case storage.ProviderS3:
+		// Endpoint + bucket + prefix is what actually distinguishes one S3
+		// destination from another; there is no OAuth account here.
+		return "s3/" + cfg.S3Endpoint + "/" + cfg.S3Bucket + "/" + cfg.Folder
 	default:
 		// provider + account + folder distinguishes distinct destinations.
 		return string(cfg.Provider) + "/" + cfg.Account + "/" + cfg.Folder
