@@ -10,6 +10,21 @@
 
 <dialog id="token-dlg" class="dlg">
   <h2>Enroll a new client</h2>
+  <h3>Recommended: download a ready-to-run installer</h3>
+  <p class="muted">The server address, token and fingerprint are already inside
+    the file — there is nothing to copy. Download it onto the client and run it
+    <b>as administrator / with sudo</b>:</p>
+  <div class="row">
+    <a class="btn primary" id="dl-win" href="#">Windows (x64)</a>
+    <a class="btn" id="dl-linux" href="#">Linux (x64)</a>
+    <a class="btn" id="dl-linux-arm" href="#">Linux (arm64)</a>
+  </div>
+  <pre class="code">Windows:  .\backup-agent-installer.exe install
+Linux:    chmod +x backup-agent-installer &amp;&amp; sudo ./backup-agent-installer install</pre>
+  <p class="muted">Each download carries its own single-use token, valid 24
+    hours. Downloading again issues a new one.</p>
+
+  <h3>Or run a command instead</h3>
   <p>Run this on the client within <b>24 hours</b> (one-time token):</p>
   <h3>Ubuntu / Linux</h3>
   <pre id="cmd-linux" class="code"></pre>
@@ -76,6 +91,11 @@ docker run -d --name backup-agent --restart unless-stopped \\
   -v /:/host:ro -v /var/run/docker.sock:/var/run/docker.sock \\
   -e CB_SERVER=${base} -e CB_TOKEN=${t.token} -e CB_FINGERPRINT=${t.fingerprint} \\
   centralbackup/agent`;
+  // The installer downloads mint their own token, so they don't consume
+  // the one shown above — the admin can use either route.
+  el('dl-win').href = '/api/admin/installer?platform=windows-amd64';
+  el('dl-linux').href = '/api/admin/installer?platform=linux-amd64';
+  el('dl-linux-arm').href = '/api/admin/installer?platform=linux-arm64';
   el('token-fp').textContent = t.fingerprint;
   el('token-dlg').showModal();
 }

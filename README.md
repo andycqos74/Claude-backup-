@@ -84,8 +84,21 @@ instead. Full step-by-step (server + clients + firewall/TLS) is in
 
 ## Quick start — clients
 
-In the GUI: **Clients → Enroll new client**. That generates a one-time
-token and shows a ready-to-paste command for each platform:
+In the GUI: **Clients → Enroll new client**, then **download the installer**
+for the client's platform. The server address, one-time token and certificate
+fingerprint are embedded in the file, so there is nothing to copy:
+
+```
+Windows:  .\backup-agent-installer.exe install     (as Administrator)
+Linux:    sudo ./backup-agent-installer install
+```
+
+That enrolls the client and registers the background service — a Windows
+service, a systemd unit, or a launchd daemon, depending on the platform.
+`backup-agent uninstall` reverses it (`--purge` also removes credentials).
+
+The same dialog still offers a ready-to-paste command per platform if you
+prefer scripting it:
 
 - **Ubuntu/Linux** — downloads the agent, enrolls, installs a systemd
   service (`backup-agent.service`).

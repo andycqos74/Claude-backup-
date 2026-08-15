@@ -62,6 +62,7 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/admin/agents/{id}", s.adminAuth(s.handleAgentDelete))
 	mux.HandleFunc("POST /api/admin/tokens", s.adminAuth(s.handleTokenCreate))
 	mux.HandleFunc("GET /api/admin/agents/{id}/docker", s.adminAuth(s.handleAgentDocker))
+	mux.HandleFunc("GET /api/admin/installer", s.adminAuth(s.handleInstaller))
 	mux.HandleFunc("GET /api/admin/jobs", s.adminAuth(s.handleJobsList))
 	mux.HandleFunc("POST /api/admin/jobs", s.adminAuth(s.handleJobSave))
 	mux.HandleFunc("DELETE /api/admin/jobs/{id}", s.adminAuth(s.handleJobDelete))

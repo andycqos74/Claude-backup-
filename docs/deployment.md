@@ -296,9 +296,34 @@ plan a re-enrollment window for each renewal.
 
 ## 4. Enroll clients
 
-In the GUI: **Clients → Enroll new client**. This generates a one-time
-token (valid 24 h) and shows a ready-to-paste command per platform. The
-command embeds the server address, token and fingerprint.
+In the GUI: **Clients → Enroll new client**.
+
+### Recommended: the downloadable installer
+
+Download the installer for the client's platform. Each download carries its
+own single-use token (valid 24 h) along with the server address and
+certificate fingerprint, so nothing has to be copied onto the client:
+
+```
+Windows (elevated PowerShell):  .\backup-agent-installer.exe install
+Linux:                          chmod +x backup-agent-installer
+                                sudo ./backup-agent-installer install
+```
+
+This enrolls the client and installs the background service in one step —
+`CentralBackupAgent` on Windows, `backup-agent.service` under systemd, or a
+launchd daemon on macOS. Undo it with `backup-agent uninstall`, adding
+`--purge` to delete the credentials and local job config too.
+
+Because there is no bootstrap script, this avoids the whole class of
+failures that come from the *installer* rather than the agent: PowerShell
+version differences, .NET TLS negotiation, execution policy, and truncated
+or mis-quoted tokens.
+
+### Alternative: a ready-to-paste command
+
+The same dialog shows a per-platform command that downloads and enrolls the
+agent, embedding the server address, token and fingerprint.
 
 ### Ubuntu / Linux
 

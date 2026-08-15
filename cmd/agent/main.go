@@ -40,6 +40,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `backup-agent %s — central backup client
 
 Usage:
+  backup-agent install                 enroll (if needed) and install the background service
+  backup-agent install --server https://host:8443 --token TOKEN [--fingerprint FP] [--name NAME]
+  backup-agent uninstall [--purge]     remove the service (--purge also deletes credentials)
   backup-agent enroll --server https://host:8443 --token TOKEN [--fingerprint FP] [--name NAME]
   backup-agent run                     run the agent daemon (foreground)
   backup-agent job list                list backup jobs
@@ -47,8 +50,12 @@ Usage:
   backup-agent job rm NAME|ID          delete a job (synced to server)
   backup-agent job enable|disable NAME|ID
   backup-agent fingerprint             show the pinned server fingerprint
-  backup-agent service install|uninstall|start|stop   (Windows only)
+  backup-agent service install|uninstall|start|stop
   backup-agent version
+
+Downloading the ready-to-run installer from the server's Clients page embeds
+the server address, token and fingerprint, so 'backup-agent install' needs no
+arguments at all.
 
 Common flags:
   --state-dir DIR   agent state directory (default %s, env CB_STATE_DIR)
@@ -65,6 +72,10 @@ func main() {
 	switch os.Args[1] {
 	case "enroll":
 		cmdEnroll(os.Args[2:])
+	case "install":
+		cmdInstall(os.Args[2:])
+	case "uninstall":
+		cmdUninstall(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
 	case "job":
@@ -106,30 +117,39 @@ func cmdEnroll(args []string) {
 		os.Exit(2)
 	}
 	*server = strings.TrimRight(*server, "/")
-
-	fp, err := agent.FetchFingerprint(*server)
-	if err != nil {
-		log.Fatalf("cannot reach server: %v", err)
+	if err := enroll(*server, *token, *fingerprint, *name, *stateDir); err != nil {
+		log.Fatal(err)
 	}
-	if *fingerprint != "" {
-		want := strings.ToLower(strings.ReplaceAll(*fingerprint, ":", ""))
+	fmt.Printf("Start the agent with: backup-agent run\n(or install it as a service with: backup-agent install)\n")
+}
+
+// enroll performs the enrollment handshake and saves the credentials. Shared
+// by the `enroll` and `install` commands so both verify the server the same
+// way.
+func enroll(server, token, fingerprint, name, stateDir string) error {
+	fp, err := agent.FetchFingerprint(server)
+	if err != nil {
+		return fmt.Errorf("cannot reach server: %w", err)
+	}
+	if fingerprint != "" {
+		want := strings.ToLower(strings.ReplaceAll(fingerprint, ":", ""))
 		if fp != want {
-			log.Fatalf("SERVER FINGERPRINT MISMATCH!\n  expected: %s\n  got:      %s\nRefusing to enroll — possible man-in-the-middle.", want, fp)
+			return fmt.Errorf("SERVER FINGERPRINT MISMATCH!\n  expected: %s\n  got:      %s\nRefusing to enroll — possible man-in-the-middle.", want, fp)
 		}
 	} else {
 		fmt.Printf("Server TLS fingerprint (trust-on-first-use): %s\n", fp)
 		fmt.Println("Verify it against the value shown in the server GUI (Settings page).")
 	}
 
-	creds, err := agent.Enroll(*server, fp, *token, *name)
+	creds, err := agent.Enroll(server, fp, token, name)
 	if err != nil {
-		log.Fatalf("enrollment failed: %v", err)
+		return err
 	}
-	if err := creds.Save(*stateDir); err != nil {
-		log.Fatalf("could not save credentials: %v", err)
+	if err := creds.Save(stateDir); err != nil {
+		return fmt.Errorf("could not save credentials: %w", err)
 	}
-	fmt.Printf("Enrolled successfully as agent %s.\nState directory: %s\nStart the agent with: backup-agent run\n",
-		creds.AgentID, *stateDir)
+	fmt.Printf("Enrolled successfully as agent %s.\nState directory: %s\n", creds.AgentID, stateDir)
+	return nil
 }
 
 func cmdRun(args []string) {

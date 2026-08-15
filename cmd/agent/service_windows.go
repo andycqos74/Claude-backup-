@@ -90,73 +90,108 @@ func cmdService(args []string) {
 	}
 	switch args[0] {
 	case "install":
-		exe, err := os.Executable()
-		if err != nil {
+		if err := installService(defaultStateDir(), defaultConfigPath(defaultStateDir())); err != nil {
 			log.Fatal(err)
-		}
-		exe, _ = filepath.Abs(exe)
-		m, err := mgr.Connect()
-		if err != nil {
-			log.Fatalf("connect to service manager (run as Administrator): %v", err)
-		}
-		defer m.Disconnect()
-		if s, err := m.OpenService(svcName); err == nil {
-			s.Close()
-			log.Fatalf("service %s already installed", svcName)
-		}
-		s, err := m.CreateService(svcName, exe, mgr.Config{
-			DisplayName: "Central Backup Agent",
-			Description: "Backs up this machine to the central backup server.",
-			StartType:   mgr.StartAutomatic,
-		}, "run")
-		if err != nil {
-			log.Fatalf("create service: %v", err)
-		}
-		defer s.Close()
-		eventlog.InstallAsEventCreate(svcName, eventlog.Error|eventlog.Warning|eventlog.Info)
-		if err := s.Start(); err != nil {
-			log.Printf("service installed but failed to start: %v", err)
-		} else {
-			fmt.Println("service installed and started")
 		}
 	case "uninstall":
-		m, err := mgr.Connect()
-		if err != nil {
+		if err := uninstallService(); err != nil {
 			log.Fatal(err)
 		}
-		defer m.Disconnect()
-		s, err := m.OpenService(svcName)
-		if err != nil {
-			log.Fatalf("service not installed: %v", err)
-		}
-		defer s.Close()
-		s.Control(svc.Stop)
-		if err := s.Delete(); err != nil {
-			log.Fatal(err)
-		}
-		eventlog.Remove(svcName)
-		fmt.Println("service uninstalled")
 	case "start", "stop":
-		m, err := mgr.Connect()
-		if err != nil {
+		if err := controlService(args[0]); err != nil {
 			log.Fatal(err)
 		}
-		defer m.Disconnect()
-		s, err := m.OpenService(svcName)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer s.Close()
-		if args[0] == "start" {
-			err = s.Start()
-		} else {
-			_, err = s.Control(svc.Stop)
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("ok")
 	default:
 		usage()
 	}
+}
+
+// installService registers the agent as an automatically started Windows
+// service. stateDir and configPath are accepted for parity with the Unix
+// implementation; the service reads them from their defaults (or the
+// CB_STATE_DIR / CB_CONFIG environment) at run time.
+func installService(stateDir, configPath string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	exe, _ = filepath.Abs(exe)
+
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("connect to service manager (run as Administrator): %w", err)
+	}
+	defer m.Disconnect()
+
+	if s, err := m.OpenService(svcName); err == nil {
+		s.Close()
+		return fmt.Errorf("service %s is already installed", svcName)
+	}
+	s, err := m.CreateService(svcName, exe, mgr.Config{
+		DisplayName: "Central Backup Agent",
+		Description: "Backs up this machine to the central backup server.",
+		StartType:   mgr.StartAutomatic,
+	}, "run", "--state-dir", stateDir, "--config", configPath)
+	if err != nil {
+		return fmt.Errorf("create service: %w", err)
+	}
+	defer s.Close()
+
+	// Restart on failure, so a crash or a killed process doesn't silently
+	// leave the machine unprotected until someone notices.
+	s.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+	}, 86400)
+
+	eventlog.InstallAsEventCreate(svcName, eventlog.Error|eventlog.Warning|eventlog.Info)
+	if err := s.Start(); err != nil {
+		return fmt.Errorf("service installed but failed to start: %w", err)
+	}
+	fmt.Println("service installed and started")
+	return nil
+}
+
+func uninstallService() error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("connect to service manager (run as Administrator): %w", err)
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(svcName)
+	if err != nil {
+		return fmt.Errorf("service not installed: %w", err)
+	}
+	defer s.Close()
+	s.Control(svc.Stop)
+	if err := s.Delete(); err != nil {
+		return err
+	}
+	eventlog.Remove(svcName)
+	fmt.Println("service uninstalled (credentials and jobs kept)")
+	return nil
+}
+
+func controlService(action string) error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(svcName)
+	if err != nil {
+		return fmt.Errorf("service not installed: %w", err)
+	}
+	defer s.Close()
+	if action == "start" {
+		err = s.Start()
+	} else {
+		_, err = s.Control(svc.Stop)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Println("ok")
+	return nil
 }
