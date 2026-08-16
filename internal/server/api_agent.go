@@ -170,6 +170,14 @@ func (s *Server) handleAgentMessage(agentID string, env proto.Envelope) error {
 		s.store.TouchAgent(agentID, nil)
 		return s.store.FinishRun(d.RunID, d.Status, d.SnapshotID, d.Error, d.Stats)
 
+	case proto.MsgDockerInventory:
+		inv, err := unmarshal[proto.DockerInventory](env.Data)
+		if err != nil {
+			return err
+		}
+		s.docker.deliver(inv)
+		return nil
+
 	default:
 		log.Printf("agent %s: unknown message type %q", agentID, env.Type)
 		return nil
@@ -195,7 +203,7 @@ func (s *Server) handleBlobCheck(w http.ResponseWriter, r *http.Request, agentID
 			return
 		}
 	}
-	missing, err := s.store.MissingBlobs(req.Hashes)
+	missing, err := s.store.MissingBlobs(s.backendKey(), req.Hashes)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -212,7 +220,7 @@ func (s *Server) handleBlobPut(w http.ResponseWriter, r *http.Request, agentID s
 		httpError(w, http.StatusBadRequest, "invalid hash")
 		return
 	}
-	if ok, _ := s.store.HasBlob(hash); ok {
+	if ok, _ := s.store.HasBlob(s.backendKey(), hash); ok {
 		io.Copy(io.Discard, r.Body)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
@@ -240,21 +248,21 @@ func (s *Server) handleBlobPut(w http.ResponseWriter, r *http.Request, agentID s
 	}()
 
 	key := storage.BlobKey(hash)
-	stored, putErr := s.storage.Put(key, io.TeeReader(r.Body, pw))
+	stored, putErr := s.backend().Put(key, io.TeeReader(r.Body, pw))
 	pw.Close()
 	decErr := <-verifyErr
 
 	if putErr != nil || decErr != nil {
-		s.storage.Delete(key)
+		s.backend().Delete(key)
 		httpError(w, http.StatusBadRequest, "blob upload failed")
 		return
 	}
 	if got := hex.EncodeToString(hasher.Sum(nil)); got != hash {
-		s.storage.Delete(key)
+		s.backend().Delete(key)
 		httpError(w, http.StatusBadRequest, "content hash mismatch")
 		return
 	}
-	if err := s.store.AddBlob(hash, rawSize, stored); err != nil {
+	if err := s.store.AddBlob(s.backendKey(), hash, rawSize, stored); err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -267,7 +275,7 @@ func (s *Server) handleBlobGet(w http.ResponseWriter, r *http.Request, agentID s
 		httpError(w, http.StatusBadRequest, "invalid hash")
 		return
 	}
-	rc, err := s.storage.Get(storage.BlobKey(hash))
+	rc, err := s.backend().Get(storage.BlobKey(hash))
 	if err != nil {
 		httpError(w, http.StatusNotFound, "blob not found")
 		return
@@ -302,16 +310,16 @@ func (s *Server) handleSnapshotCommit(w http.ResponseWriter, r *http.Request, ag
 
 	snapID := store.NewID()
 	key := storage.ManifestKey(snapID)
-	if _, err := s.storage.Put(key, io.LimitReader(r.Body, 8<<30)); err != nil {
+	if _, err := s.backend().Put(key, io.LimitReader(r.Body, 8<<30)); err != nil {
 		httpError(w, http.StatusInternalServerError, "manifest store failed")
 		return
 	}
 	err = s.store.CreateSnapshot(store.Snapshot{
-		ID: snapID, JobID: jobID, AgentID: agentID, RunID: runID,
+		ID: snapID, Backend: s.backendKey(), JobID: jobID, AgentID: agentID, RunID: runID,
 		Mode: mode, Files: files, Bytes: bytes, ManifestKey: key,
 	})
 	if err != nil {
-		s.storage.Delete(key)
+		s.backend().Delete(key)
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -324,7 +332,7 @@ func (s *Server) handleManifestGet(w http.ResponseWriter, r *http.Request, agent
 		httpError(w, http.StatusNotFound, "snapshot not found")
 		return
 	}
-	rc, err := s.storage.Get(sn.ManifestKey)
+	rc, err := s.backend().Get(sn.ManifestKey)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "manifest not found")
 		return

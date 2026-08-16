@@ -10,6 +10,21 @@
 
 <dialog id="token-dlg" class="dlg">
   <h2>Enroll a new client</h2>
+  <h3>Recommended: download a ready-to-run installer</h3>
+  <p class="muted">The server address, token and fingerprint are already inside
+    the file — there is nothing to copy. Download it onto the client and run it
+    <b>as administrator / with sudo</b>:</p>
+  <div class="row">
+    <a class="btn primary" id="dl-win" href="#">Windows (x64)</a>
+    <a class="btn" id="dl-linux" href="#">Linux (x64)</a>
+    <a class="btn" id="dl-linux-arm" href="#">Linux (arm64)</a>
+  </div>
+  <pre class="code">Windows:  .\backup-agent-installer.exe install
+Linux:    chmod +x backup-agent-installer &amp;&amp; sudo ./backup-agent-installer install</pre>
+  <p class="muted">Each download carries its own single-use token, valid 24
+    hours. Downloading again issues a new one.</p>
+
+  <h3>Or run a command instead</h3>
   <p>Run this on the client within <b>24 hours</b> (one-time token):</p>
   <h3>Ubuntu / Linux</h3>
   <pre id="cmd-linux" class="code"></pre>
@@ -17,7 +32,12 @@
   <pre id="cmd-win" class="code"></pre>
   <h3>Docker host (containerized agent)</h3>
   <pre id="cmd-docker" class="code"></pre>
-  <p class="muted">Expected TLS fingerprint: <code id="token-fp"></code></p>
+  <p class="muted">Server address: <code id="token-base"></code><br>
+    Expected TLS fingerprint: <code id="token-fp"></code></p>
+  <p id="token-base-warn" class="muted" hidden style="margin:.2rem 0">
+    This differs from the address you are browsing with, because
+    <code>CB_PUBLIC_URL</code> is set. The command above is the correct one —
+    it is what the client must be able to reach.</p>
   <button class="btn" onclick="el('token-dlg').close()">Close</button>
 </dialog>
 <script>
@@ -31,19 +51,39 @@ async function load() {
 }
 async function newToken() {
   const t = await api('POST', '/api/admin/tokens', {note: ''});
-  const base = location.origin;
+  // Prefer the server's configured public URL (CB_PUBLIC_URL). Falling back
+  // to location.origin means enrolling while browsing by IP would hand the
+  // agent that IP, which then fails against a hostname-only deployment.
+  const base = t.base_url || location.origin;
+  el('token-base').textContent = base;
+  el('token-base-warn').hidden = base === location.origin;
   el('cmd-linux').textContent =
     `curl -fsSLk ${base}/static/install-agent.sh | sudo bash -s -- --server ${base} --token ${t.token} --fingerprint ${t.fingerprint}`;
-  // Works on both Windows PowerShell 5.1 and PowerShell 7+: 5.1 honours the
-  // ServicePointManager callback, 7+ uses -SkipCertificateCheck. Needed only
-  // to fetch the script over the self-signed cert; enrollment then pins the
-  // fingerprint.
+  // Bypasses cert validation only to fetch the script over the self-signed
+  // cert; enrollment then pins the fingerprint. PS7+ uses the modern
+  // -SkipCertificateCheck switch; Windows PowerShell 5.1 (.NET Framework)
+  // uses the legacy ICertificatePolicy interface, which is more reliable
+  // than the ServerCertificateValidationCallback delegate in locked-down
+  // or AV/EDR-monitored environments.
   el('cmd-win').textContent =
-    `if($PSVersionTable.PSVersion.Major -ge 6){$PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']=$true}` +
-    `else{[Net.ServicePointManager]::ServerCertificateValidationCallback={$true}}; ` +
-    `[Net.ServicePointManager]::SecurityProtocol='Tls12'; ` +
-    `iwr ${base}/static/install-agent.ps1 -UseBasicParsing -OutFile $env:TEMP\\install-agent.ps1; ` +
-    `& $env:TEMP\\install-agent.ps1 -Server ${base} -Token ${t.token} -Fingerprint ${t.fingerprint}`;
+`Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+  if (-not ('CBTrustAllCertsPolicy' -as [type])) {
+    Add-Type @"
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
+public class CBTrustAllCertsPolicy : ICertificatePolicy {
+    public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
+}
+"@
+  }
+  [Net.ServicePointManager]::CertificatePolicy = New-Object CBTrustAllCertsPolicy
+}
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$iwrArgs = @{ UseBasicParsing = $true }
+if ($PSVersionTable.PSVersion.Major -ge 6) { $iwrArgs.SkipCertificateCheck = $true }
+iwr @iwrArgs -Uri ${base}/static/install-agent.ps1 -OutFile $env:TEMP\\install-agent.ps1
+& $env:TEMP\\install-agent.ps1 -Server ${base} -Token ${t.token} -Fingerprint ${t.fingerprint}`;
   el('cmd-docker').textContent =
     `# build the agent image once from this repo, then:
 docker run -d --name backup-agent --restart unless-stopped \\
@@ -51,6 +91,11 @@ docker run -d --name backup-agent --restart unless-stopped \\
   -v /:/host:ro -v /var/run/docker.sock:/var/run/docker.sock \\
   -e CB_SERVER=${base} -e CB_TOKEN=${t.token} -e CB_FINGERPRINT=${t.fingerprint} \\
   centralbackup/agent`;
+  // The installer downloads mint their own token, so they don't consume
+  // the one shown above — the admin can use either route.
+  el('dl-win').href = '/api/admin/installer?platform=windows-amd64';
+  el('dl-linux').href = '/api/admin/installer?platform=linux-amd64';
+  el('dl-linux-arm').href = '/api/admin/installer?platform=linux-arm64';
   el('token-fp').textContent = t.fingerprint;
   el('token-dlg').showModal();
 }

@@ -79,8 +79,9 @@ function fillRows(tableID, rows, emptyMsg) {
 let toastTimer;
 function toast(msg) {
   const t = el('toast');
+  if (!t) { console.warn('toast:', msg); return; } // element not in DOM yet
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 6000);
 }

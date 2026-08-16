@@ -117,9 +117,9 @@ func WriteConfigFile(path string, cf *ConfigFile) error {
 type localConfig struct {
 	a           *Agent
 	mu          sync.Mutex
-	lastHash    string                // content hash last read/written by us
-	serverJobs  map[string]proto.Job  // authoritative set, by job id
-	sentCreates map[string]bool       // job names with an in-flight create
+	lastHash    string               // content hash last read/written by us
+	serverJobs  map[string]proto.Job // authoritative set, by job id
+	sentCreates map[string]bool      // job names with an in-flight create
 }
 
 func newLocalConfig(a *Agent) *localConfig {

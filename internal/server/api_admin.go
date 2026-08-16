@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -60,12 +61,15 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/admin/agents/{id}/rename", s.adminAuth(s.handleAgentRename))
 	mux.HandleFunc("DELETE /api/admin/agents/{id}", s.adminAuth(s.handleAgentDelete))
 	mux.HandleFunc("POST /api/admin/tokens", s.adminAuth(s.handleTokenCreate))
+	mux.HandleFunc("GET /api/admin/agents/{id}/docker", s.adminAuth(s.handleAgentDocker))
+	mux.HandleFunc("GET /api/admin/installer", s.adminAuth(s.handleInstaller))
 	mux.HandleFunc("GET /api/admin/jobs", s.adminAuth(s.handleJobsList))
 	mux.HandleFunc("POST /api/admin/jobs", s.adminAuth(s.handleJobSave))
 	mux.HandleFunc("DELETE /api/admin/jobs/{id}", s.adminAuth(s.handleJobDelete))
 	mux.HandleFunc("POST /api/admin/jobs/{id}/run", s.adminAuth(s.handleJobRun))
 	mux.HandleFunc("GET /api/admin/runs", s.adminAuth(s.handleRunsList))
 	mux.HandleFunc("GET /api/admin/runs/{id}", s.adminAuth(s.handleRunGet))
+	mux.HandleFunc("POST /api/admin/runs/{id}/cancel", s.adminAuth(s.handleRunCancel))
 	mux.HandleFunc("GET /api/admin/snapshots", s.adminAuth(s.handleSnapshotsList))
 	mux.HandleFunc("GET /api/admin/snapshots/{id}/tree", s.adminAuth(s.handleSnapshotTree))
 	mux.HandleFunc("POST /api/admin/snapshots/{id}/restore", s.adminAuth(s.handleSnapshotRestore))
@@ -198,7 +202,8 @@ func (s *Server) handleAgentRename(w http.ResponseWriter, r *http.Request) {
 // snapshots (manifests deleted now, blob data on next GC).
 func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	snaps, err := s.store.ListSnapshots(id, "")
+	// Deleting a client removes its snapshots across every backend.
+	snaps, err := s.store.ListSnapshots("", id, "")
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -226,7 +231,26 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"token":       token,
 		"fingerprint": s.fingerprint,
+		// The base URL the agent should connect back to. Sent by the server
+		// rather than taken from the browser's address bar so that enrolling
+		// while browsing by IP still produces a working command.
+		"base_url": s.publicBaseURL(r),
 	})
+}
+
+// handleAgentDocker returns the container inventory of a Docker host client,
+// used by the job editor to offer containers as tick-boxes. Agents that
+// aren't Docker hosts answer with available:false, which the GUI treats as
+// "no picker", not an error.
+func (s *Server) handleAgentDocker(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	inv, err := s.discoverDocker(ctx, r.PathValue("id"))
+	if err != nil {
+		httpError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, inv)
 }
 
 // ---- jobs ----
@@ -382,11 +406,21 @@ func (s *Server) handleRunGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleRunCancel(w http.ResponseWriter, r *http.Request) {
+	if err := s.cancelRun(r.PathValue("id")); err != nil {
+		httpError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // ---- snapshots ----
 
 func (s *Server) handleSnapshotsList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	snaps, err := s.store.ListSnapshots(q.Get("agent"), q.Get("job"))
+	// Only snapshots stored in the active backend are browsable/restorable
+	// (their manifests and blobs live there).
+	snaps, err := s.store.ListSnapshots(s.backendKey(), q.Get("agent"), q.Get("job"))
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -504,7 +538,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	stats, err := s.store.Stats()
+	stats, err := s.store.Stats(s.backendKey())
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
@@ -517,7 +551,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	stats, _ := s.store.Stats()
+	stats, _ := s.store.Stats(s.backendKey())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"fingerprint": s.fingerprint,
 		"stats":       stats,

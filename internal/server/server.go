@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"centralbackup/internal/server/store"
 	"centralbackup/internal/server/storage"
+	"centralbackup/internal/server/store"
 )
 
 type Config struct {
@@ -24,6 +24,7 @@ type Config struct {
 	DataDir    string // sqlite db, tls certs
 	StorageDir string // blob/manifest storage root (localfs backend)
 	ServerName string // comma-separated extra SANs for the generated cert
+	PublicURL  string // externally reachable origin, e.g. https://backup.example.com:8443
 	CertFile   string // optional externally provided cert
 	KeyFile    string
 	AgentBins  string // directory of prebuilt agent binaries served at /dl/
@@ -42,6 +43,7 @@ func ConfigFromEnv() Config {
 		DataDir:    dataDir,
 		StorageDir: get("CB_STORAGE_DIR", filepath.Join(dataDir, "storage")),
 		ServerName: get("CB_SERVER_NAME", ""),
+		PublicURL:  get("CB_PUBLIC_URL", ""),
 		CertFile:   get("CB_TLS_CERT", ""),
 		KeyFile:    get("CB_TLS_KEY", ""),
 		AgentBins:  get("CB_AGENT_BIN_DIR", "./agents"),
@@ -51,29 +53,53 @@ func ConfigFromEnv() Config {
 type Server struct {
 	cfg         Config
 	store       *store.Store
-	storage     storage.Backend
 	hub         *Hub
 	fingerprint string
 	tlsCert     tls.Certificate
+
+	// storageMu guards the active backend and its ID, which can be swapped
+	// at runtime when the admin changes the storage provider. Read them via
+	// backend() and backendKey().
+	storageMu        sync.RWMutex
+	storageActive    storage.Backend
+	storageBackendID string
 
 	// commitMu serialises snapshot commits against garbage collection:
 	// commits take the read lock, GC takes the write lock.
 	commitMu sync.RWMutex
 
+	// oauth holds the in-flight storage "connect" flow state.
+	oauth oauthFlow
+
+	// docker correlates in-flight container-discovery requests with the
+	// agent replies that answer them.
+	docker dockerDiscovery
+
 	web *webUI
 }
 
+// backend returns the currently active storage backend.
+func (s *Server) backend() storage.Backend {
+	s.storageMu.RLock()
+	defer s.storageMu.RUnlock()
+	return s.storageActive
+}
+
 func New(cfg Config) (*Server, error) {
+	// Validate before touching disk so a typo fails fast and loudly rather
+	// than silently producing unusable enrollment commands.
+	publicURL, err := normalizePublicURL(cfg.PublicURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.PublicURL = publicURL
+
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, err
 	}
 	st, err := store.Open(filepath.Join(cfg.DataDir, "server.db"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
-	}
-	backend, err := storage.NewLocalFS(cfg.StorageDir)
-	if err != nil {
-		return nil, fmt.Errorf("open storage: %w", err)
 	}
 
 	certFile, keyFile := cfg.CertFile, cfg.KeyFile
@@ -93,10 +119,12 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg:         cfg,
 		store:       st,
-		storage:     backend,
 		hub:         newHub(),
 		fingerprint: fp,
 		tlsCert:     cert,
+	}
+	if err := s.initStorage(); err != nil {
+		return nil, fmt.Errorf("open storage: %w", err)
 	}
 	s.web, err = newWebUI(s)
 	if err != nil {
@@ -119,6 +147,7 @@ func (s *Server) Run() error {
 
 	// Admin API (session cookie).
 	s.registerAdminAPI(mux)
+	s.registerStorageAPI(mux)
 
 	// Web GUI.
 	s.web.register(mux)
@@ -133,6 +162,14 @@ func (s *Server) Run() error {
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{s.tlsCert},
 			MinVersion:   tls.VersionTLS12,
+			// Capped at 1.2: .NET Framework's HttpWebRequest (used by
+			// Windows PowerShell 5.1's Invoke-WebRequest) fails the
+			// handshake against TLS 1.3's post-handshake NewSessionTicket
+			// message ("underlying connection was closed: unexpected error
+			// on a send"), even though every other client handles it fine.
+			// TLS 1.2 with modern cipher suites has no practical security
+			// downside here and sidesteps that whole bug class.
+			MaxVersion: tls.VersionTLS12,
 		},
 	}
 

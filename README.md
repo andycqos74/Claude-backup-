@@ -22,7 +22,8 @@ compressed and deduplicated, stored on the server's local storage.
 ## Features
 
 - **Web GUI** for everything: enroll clients, define jobs, schedules,
-  watch progress live, browse snapshots, restore or download files.
+  watch progress live, cancel a run in progress, browse snapshots, restore
+  or download files.
 - **Jobs configurable from both sides** — edit in the GUI *or* on the
   client (`backup-agent job add …` / edit `agent.yaml`); changes sync both
   ways automatically (last write wins).
@@ -40,9 +41,16 @@ compressed and deduplicated, stored on the server's local storage.
 - **Retention** per job (keep last N / newer than N days) with automatic
   garbage collection.
 - **Docker-aware**: containerized agent for Docker hosts with pre/post
-  hooks (e.g. `pg_dump` before backup) and host-volume access.
-- Pluggable storage backend: local disk today; Google Drive / OneDrive
-  planned (see [docs/roadmap.md](docs/roadmap.md)).
+  hooks (e.g. `pg_dump` before backup) and host-volume access. The job
+  editor lists the client's **containers as tick-boxes**, grouped by
+  compose stack, and fills in the paths — generating the dump hook for
+  recognised databases — so new containers can be added without looking up
+  volume paths.
+- **Pluggable storage backend**: the server's local disk, any
+  **S3-compatible** provider (Backblaze B2, Wasabi, Cloudflare R2, MinIO,
+  Storj — endpoint, bucket and a key pair, no app registration), or your own
+  **OneDrive** via an OAuth connect flow in the GUI. See
+  [docs/storage.md](docs/storage.md).
 
 ## Quick start — server
 
@@ -50,16 +58,25 @@ Requirements: Docker + Docker Compose on the machine that will hold backups.
 
 ```bash
 git clone <this repo> && cd <repo>
-CB_SERVER_NAME=backup.example.com docker compose -f deploy/docker-compose.yml up -d --build
+CB_SERVER_NAME=backup.example.com \
+CB_PUBLIC_URL=https://backup.example.com:8443 \
+  docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 - Open `https://<server>:8443` (the certificate is self-signed — that's
   expected) and create the admin account on first visit.
 - `CB_SERVER_NAME` should be the DNS name (or IP) agents will use.
+- `CB_PUBLIC_URL` is the address clients and OAuth providers will use. It's
+  optional but recommended: it pins the URL baked into enrollment commands
+  and the OAuth redirect, so browsing the GUI by IP can't generate a
+  command pointing at that IP.
 - All state lives in the `backup-data` volume (`/data`): SQLite database,
   TLS certificate and backup storage. Mount a big disk there.
 - Remote clients must be able to reach port 8443 on this machine — that is
-  the **only** port the whole system needs.
+  the **only** port the whole system needs. Reach it **directly**: agents
+  pin the server's certificate fingerprint, so a Cloudflare Tunnel or any
+  other TLS-terminating proxy in front of the server will break them. See
+  [docs/deployment.md](docs/deployment.md#3-reverse-proxies-tunnels-and-cloudflare).
 
 Prefer not to use Docker? The server is a single static binary — run
 `sudo CB_SERVER_NAME=… scripts/install-server.sh` for a systemd install
@@ -68,8 +85,21 @@ instead. Full step-by-step (server + clients + firewall/TLS) is in
 
 ## Quick start — clients
 
-In the GUI: **Clients → Enroll new client**. That generates a one-time
-token and shows a ready-to-paste command for each platform:
+In the GUI: **Clients → Enroll new client**, then **download the installer**
+for the client's platform. The server address, one-time token and certificate
+fingerprint are embedded in the file, so there is nothing to copy:
+
+```
+Windows:  .\backup-agent-installer.exe install     (as Administrator)
+Linux:    sudo ./backup-agent-installer install
+```
+
+That enrolls the client and registers the background service — a Windows
+service, a systemd unit, or a launchd daemon, depending on the platform.
+`backup-agent uninstall` reverses it (`--purge` also removes credentials).
+
+The same dialog still offers a ready-to-paste command per platform if you
+prefer scripting it:
 
 - **Ubuntu/Linux** — downloads the agent, enrolls, installs a systemd
   service (`backup-agent.service`).
@@ -151,7 +181,11 @@ go vet ./...
 scripts/build-release.sh   # cross-compile server + agents into dist/
 ```
 
-See [docs/security.md](docs/security.md) for the security model,
+See [docs/deployment.md](docs/deployment.md) for the deploy runbook,
+[docs/docker-backups.md](docs/docker-backups.md) for backing up a Docker
+host (volumes, bind mounts, database dumps),
+[docs/storage.md](docs/storage.md) for cloud storage backends,
+[docs/security.md](docs/security.md) for the security model,
 [docs/operations.md](docs/operations.md) for day-2 operations and
-[docs/roadmap.md](docs/roadmap.md) for planned work (cloud storage
-backends, VSS, client-side encryption).
+[docs/roadmap.md](docs/roadmap.md) for planned work (Box, off-site mirror,
+VSS, client-side encryption).

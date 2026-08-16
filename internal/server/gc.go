@@ -32,7 +32,7 @@ func (s *Server) pruneRetention() error {
 		if job.KeepLast <= 0 && job.KeepDays <= 0 {
 			continue
 		}
-		snaps, err := s.store.ListSnapshots("", job.ID) // newest first
+		snaps, err := s.store.ListSnapshots(s.backendKey(), "", job.ID) // newest first, this backend
 		if err != nil {
 			return err
 		}
@@ -66,7 +66,7 @@ func (s *Server) deleteSnapshot(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.storage.Delete(sn.ManifestKey); err != nil {
+	if err := s.backend().Delete(sn.ManifestKey); err != nil {
 		return err
 	}
 	return s.store.DeleteSnapshot(id)
@@ -84,8 +84,12 @@ func (s *Server) gcBlobs() error {
 	s.commitMu.Lock()
 	defer s.commitMu.Unlock()
 
+	// Scope to the active backend: reference-count from this backend's
+	// snapshots and sweep only this backend's blob index/objects. Snapshots
+	// and blobs belonging to other backends are a separate namespace.
+	backend := s.backendKey()
 	referenced := map[string]bool{}
-	snaps, err := s.store.ListSnapshots("", "")
+	snaps, err := s.store.ListSnapshots(backend, "", "")
 	if err != nil {
 		return err
 	}
@@ -103,7 +107,7 @@ func (s *Server) gcBlobs() error {
 		}
 	}
 
-	all, err := s.store.AllBlobs()
+	all, err := s.store.AllBlobs(backend)
 	if err != nil {
 		return err
 	}
@@ -113,10 +117,10 @@ func (s *Server) gcBlobs() error {
 		if referenced[hash] || createdAt > graceCutoff {
 			continue
 		}
-		if err := s.storage.Delete(storage.BlobKey(hash)); err != nil {
+		if err := s.backend().Delete(storage.BlobKey(hash)); err != nil {
 			return err
 		}
-		if err := s.store.DeleteBlob(hash); err != nil {
+		if err := s.store.DeleteBlob(backend, hash); err != nil {
 			return err
 		}
 		removed++

@@ -1,5 +1,9 @@
 {{define "content"}}
-<h1 id="title">Run</h1>
+<div class="page-head">
+  <h1 id="title">Run</h1>
+  <span class="spacer"></span>
+  <button class="btn danger" id="cancel-btn" onclick="cancelRun()" hidden>Cancel run</button>
+</div>
 <p id="meta" class="muted"></p>
 <div class="card" id="progress-card" hidden>
   <div class="progress"><div class="progress-bar" id="pbar"></div></div>
@@ -25,6 +29,8 @@ async function load() {
   el('meta').innerHTML = meta + (r.Error ? `<br><span class="err">${esc(r.Error)}</span>` : '');
 
   const running = r.Status === 'running';
+  const cancellable = running || r.Status === 'queued';
+  el('cancel-btn').hidden = !cancellable;
   el('progress-card').hidden = !running;
   if (running && r.Progress) {
     try {
@@ -37,7 +43,18 @@ async function load() {
   el('log').textContent = d.logs
     ? d.logs.map(l => `${new Date(l.TS).toISOString()} [${l.Level}] ${l.Message}`).join('\n')
     : '';
-  if (running || r.Status === 'queued') setTimeout(load, 2000);
+  if (cancellable) setTimeout(load, 2000);
+}
+async function cancelRun() {
+  if (!confirm('Cancel this run? A backup in progress stops without creating a snapshot.')) return;
+  try {
+    await api('POST', `/api/admin/runs/${runID}/cancel`);
+    toast('Cancellation requested');
+    // Not an immediate load(): the run only actually stops once the agent
+    // reports back, which the next poll (still scheduled, since the run is
+    // still "running" right now) will pick up. Calling load() here too
+    // would race that poll and can flash stale state back onto the page.
+  } catch (err) { toast(err.message); }
 }
 load();
 </script>

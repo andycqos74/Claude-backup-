@@ -1,9 +1,8 @@
 package server
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -28,7 +27,11 @@ func ensureTLSCert(certPath, keyPath string, sans []string) (tls.Certificate, er
 		return tls.LoadX509KeyPair(certPath, keyPath)
 	}
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// RSA, not ECDSA: .NET Framework's HttpWebRequest (used by Windows
+	// PowerShell 5.1's Invoke-WebRequest) has a narrower cipher suite list
+	// than modern clients and fails ECDSA-only handshakes with a vague
+	// "unexpected error occurred on a send". RSA is universally supported.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -63,16 +66,13 @@ func ensureTLSCert(certPath, keyPath string, sans []string) (tls.Certificate, er
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
+	keyDER := x509.MarshalPKCS1PrivateKey(key)
 
 	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
 		return tls.Certificate{}, err
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER})
 	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
 		return tls.Certificate{}, err
 	}

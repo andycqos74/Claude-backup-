@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS enroll_tokens (
 	expires_at INTEGER NOT NULL,
 	used_by TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS settings (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agents (
 	id TEXT PRIMARY KEY,
 	secret_hash TEXT NOT NULL,
@@ -127,7 +131,62 @@ CREATE TABLE IF NOT EXISTS blobs (
 	created_at INTEGER NOT NULL
 );
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	return s.migrateBackendScoping()
+}
+
+// migrateBackendScoping adds a `backend` dimension to the blobs and
+// snapshots tables so the blob dedup index and snapshot set are tracked
+// per storage backend. Without this, switching backends (e.g. local ->
+// OneDrive) leaves the server thinking it already holds blobs that only
+// exist in the old backend, so it never re-uploads them — causing silent
+// "blob not found" failures on the new backend. Existing rows are the
+// original local backend.
+func (s *Store) migrateBackendScoping() error {
+	if !s.columnExists("blobs", "backend") {
+		// Rebuild blobs with a composite (backend, hash) primary key so the
+		// same content can be tracked independently in multiple backends.
+		if _, err := s.db.Exec(`
+			ALTER TABLE blobs RENAME TO blobs_old;
+			CREATE TABLE blobs (
+				backend TEXT NOT NULL DEFAULT 'local',
+				hash TEXT NOT NULL,
+				size_raw INTEGER NOT NULL,
+				size_stored INTEGER NOT NULL,
+				created_at INTEGER NOT NULL,
+				PRIMARY KEY (backend, hash)
+			);
+			INSERT INTO blobs (backend, hash, size_raw, size_stored, created_at)
+				SELECT 'local', hash, size_raw, size_stored, created_at FROM blobs_old;
+			DROP TABLE blobs_old;
+		`); err != nil {
+			return err
+		}
+	}
+	if !s.columnExists("snapshots", "backend") {
+		if _, err := s.db.Exec(`ALTER TABLE snapshots ADD COLUMN backend TEXT NOT NULL DEFAULT 'local';
+			CREATE INDEX IF NOT EXISTS idx_snapshots_backend ON snapshots(backend, job_id, created_at);`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) columnExists(table, column string) bool {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil && name == column {
+			return true
+		}
+	}
+	return false
 }
 
 func NewID() string {
@@ -611,6 +670,7 @@ func (s *Store) RunLogs(runID string) ([]RunLogLine, error) {
 
 type Snapshot struct {
 	ID          string
+	Backend     string
 	JobID       string
 	AgentID     string
 	RunID       string
@@ -621,27 +681,39 @@ type Snapshot struct {
 	ManifestKey string
 }
 
-func (s *Store) CreateSnapshot(sn Snapshot) error {
-	_, err := s.db.Exec(`INSERT INTO snapshots (id, job_id, agent_id, run_id, mode, files, bytes, created_at, manifest_key)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		sn.ID, sn.JobID, sn.AgentID, sn.RunID, sn.Mode, sn.Files, sn.Bytes, now(), sn.ManifestKey)
-	return err
-}
+const snapshotCols = `id, backend, job_id, agent_id, run_id, mode, files, bytes, created_at, manifest_key`
 
-func (s *Store) GetSnapshot(id string) (*Snapshot, error) {
+func scanSnapshot(scan func(dest ...any) error) (*Snapshot, error) {
 	var sn Snapshot
-	err := s.db.QueryRow(`SELECT id, job_id, agent_id, run_id, mode, files, bytes, created_at, manifest_key FROM snapshots WHERE id = ?`, id).
-		Scan(&sn.ID, &sn.JobID, &sn.AgentID, &sn.RunID, &sn.Mode, &sn.Files, &sn.Bytes, &sn.CreatedAt, &sn.ManifestKey)
+	err := scan(&sn.ID, &sn.Backend, &sn.JobID, &sn.AgentID, &sn.RunID, &sn.Mode, &sn.Files, &sn.Bytes, &sn.CreatedAt, &sn.ManifestKey)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
 	return &sn, err
 }
 
-func (s *Store) ListSnapshots(agentID, jobID string) ([]Snapshot, error) {
-	q := `SELECT id, job_id, agent_id, run_id, mode, files, bytes, created_at, manifest_key FROM snapshots`
+func (s *Store) CreateSnapshot(sn Snapshot) error {
+	_, err := s.db.Exec(`INSERT INTO snapshots (id, backend, job_id, agent_id, run_id, mode, files, bytes, created_at, manifest_key)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		sn.ID, sn.Backend, sn.JobID, sn.AgentID, sn.RunID, sn.Mode, sn.Files, sn.Bytes, now(), sn.ManifestKey)
+	return err
+}
+
+func (s *Store) GetSnapshot(id string) (*Snapshot, error) {
+	return scanSnapshot(s.db.QueryRow(`SELECT `+snapshotCols+` FROM snapshots WHERE id = ?`, id).Scan)
+}
+
+// ListSnapshots lists snapshots in a backend, optionally filtered by agent
+// and/or job. An empty backend lists across all backends (used only where
+// backend scoping is intentionally ignored).
+func (s *Store) ListSnapshots(backend, agentID, jobID string) ([]Snapshot, error) {
+	q := `SELECT ` + snapshotCols + ` FROM snapshots`
 	var conds []string
 	var args []any
+	if backend != "" {
+		conds = append(conds, `backend = ?`)
+		args = append(args, backend)
+	}
 	if agentID != "" {
 		conds = append(conds, `agent_id = ?`)
 		args = append(args, agentID)
@@ -665,25 +737,22 @@ func (s *Store) ListSnapshots(agentID, jobID string) ([]Snapshot, error) {
 	defer rows.Close()
 	var out []Snapshot
 	for rows.Next() {
-		var sn Snapshot
-		if err := rows.Scan(&sn.ID, &sn.JobID, &sn.AgentID, &sn.RunID, &sn.Mode, &sn.Files, &sn.Bytes, &sn.CreatedAt, &sn.ManifestKey); err != nil {
+		sn, err := scanSnapshot(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, sn)
+		out = append(out, *sn)
 	}
 	return out, rows.Err()
 }
 
-// LatestSnapshot returns the most recent snapshot for a job, or ErrNotFound.
-func (s *Store) LatestSnapshot(jobID string) (*Snapshot, error) {
-	var sn Snapshot
-	err := s.db.QueryRow(`SELECT id, job_id, agent_id, run_id, mode, files, bytes, created_at, manifest_key
-		FROM snapshots WHERE job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`, jobID).
-		Scan(&sn.ID, &sn.JobID, &sn.AgentID, &sn.RunID, &sn.Mode, &sn.Files, &sn.Bytes, &sn.CreatedAt, &sn.ManifestKey)
-	if err == sql.ErrNoRows {
-		return nil, ErrNotFound
-	}
-	return &sn, err
+// LatestSnapshot returns the most recent snapshot for a job within a
+// backend, or ErrNotFound. Scoping by backend means the first backup after
+// switching backends has no prior snapshot and is therefore effectively a
+// full backup — which correctly re-uploads everything to the new backend.
+func (s *Store) LatestSnapshot(backend, jobID string) (*Snapshot, error) {
+	return scanSnapshot(s.db.QueryRow(`SELECT `+snapshotCols+`
+		FROM snapshots WHERE backend = ? AND job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`, backend, jobID).Scan)
 }
 
 func (s *Store) DeleteSnapshot(id string) error {
@@ -692,20 +761,24 @@ func (s *Store) DeleteSnapshot(id string) error {
 }
 
 // ---- blobs ----
+//
+// Blobs are tracked per backend: the same content hash can be independently
+// present (or absent) in different storage backends, so the dedup index and
+// GC operate within one backend at a time.
 
-func (s *Store) HasBlob(hash string) (bool, error) {
+func (s *Store) HasBlob(backend, hash string) (bool, error) {
 	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM blobs WHERE hash = ?`, hash).Scan(&one)
+	err := s.db.QueryRow(`SELECT 1 FROM blobs WHERE backend = ? AND hash = ?`, backend, hash).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (s *Store) MissingBlobs(hashes []string) ([]string, error) {
+func (s *Store) MissingBlobs(backend string, hashes []string) ([]string, error) {
 	var missing []string
 	for _, h := range hashes {
-		ok, err := s.HasBlob(h)
+		ok, err := s.HasBlob(backend, h)
 		if err != nil {
 			return nil, err
 		}
@@ -716,20 +789,20 @@ func (s *Store) MissingBlobs(hashes []string) ([]string, error) {
 	return missing, nil
 }
 
-func (s *Store) AddBlob(hash string, sizeRaw, sizeStored int64) error {
-	_, err := s.db.Exec(`INSERT INTO blobs (hash, size_raw, size_stored, created_at) VALUES (?,?,?,?)
-		ON CONFLICT(hash) DO NOTHING`, hash, sizeRaw, sizeStored, now())
+func (s *Store) AddBlob(backend, hash string, sizeRaw, sizeStored int64) error {
+	_, err := s.db.Exec(`INSERT INTO blobs (backend, hash, size_raw, size_stored, created_at) VALUES (?,?,?,?,?)
+		ON CONFLICT(backend, hash) DO NOTHING`, backend, hash, sizeRaw, sizeStored, now())
 	return err
 }
 
-func (s *Store) DeleteBlob(hash string) error {
-	_, err := s.db.Exec(`DELETE FROM blobs WHERE hash = ?`, hash)
+func (s *Store) DeleteBlob(backend, hash string) error {
+	_, err := s.db.Exec(`DELETE FROM blobs WHERE backend = ? AND hash = ?`, backend, hash)
 	return err
 }
 
-// AllBlobs returns hash -> created_at for GC mark/sweep.
-func (s *Store) AllBlobs() (map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT hash, created_at FROM blobs`)
+// AllBlobs returns hash -> created_at for GC mark/sweep within a backend.
+func (s *Store) AllBlobs(backend string) (map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT hash, created_at FROM blobs WHERE backend = ?`, backend)
 	if err != nil {
 		return nil, err
 	}
@@ -753,12 +826,36 @@ type StorageStats struct {
 	Snapshots  int64
 }
 
-func (s *Store) Stats() (StorageStats, error) {
+// Stats reports storage usage for a single backend (the active one).
+func (s *Store) Stats(backend string) (StorageStats, error) {
 	var st StorageStats
-	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(size_raw),0), COALESCE(SUM(size_stored),0) FROM blobs`).
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(size_raw),0), COALESCE(SUM(size_stored),0) FROM blobs WHERE backend = ?`, backend).
 		Scan(&st.Blobs, &st.SizeRaw, &st.SizeStored); err != nil {
 		return st, err
 	}
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM snapshots`).Scan(&st.Snapshots)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM snapshots WHERE backend = ?`, backend).Scan(&st.Snapshots)
 	return st, err
+}
+
+// ---- settings (key/value) ----
+
+// GetSetting returns the stored value for key, or "" if unset.
+func (s *Store) GetSetting(key string) (string, error) {
+	var v string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting stores (or replaces) a value. An empty value deletes the key.
+func (s *Store) SetSetting(key, value string) error {
+	if value == "" {
+		_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?,?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
 }

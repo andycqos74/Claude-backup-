@@ -29,10 +29,38 @@ type Agent struct {
 	ws   *websocket.Conn
 	runs sync.Mutex // serialises backup/restore runs
 
+	runMu        sync.Mutex // guards the two fields below
+	currentRunID string
+	cancelRun    context.CancelFunc
+
 	cfg *localConfig // agent.yaml state (see config.go)
 }
 
+// beginRun registers a cancellable context for the run about to start. Only
+// one run is ever active at a time (guarded by a.runs), so tracking a
+// single current run is sufficient.
+func (a *Agent) beginRun(runID string) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.runMu.Lock()
+	a.currentRunID, a.cancelRun = runID, cancel
+	a.runMu.Unlock()
+	return ctx
+}
+
+// endRun clears the tracked run once it finishes, if it's still current.
+func (a *Agent) endRun(runID string) {
+	a.runMu.Lock()
+	if a.currentRunID == runID {
+		a.currentRunID, a.cancelRun = "", nil
+	}
+	a.runMu.Unlock()
+}
+
 func New(stateDir, configPath string) (*Agent, error) {
+	// On Windows this enables SeBackupPrivilege so the backup engine can
+	// read files/dirs whose ACLs deny the service account; no-op elsewhere.
+	enableBackupPrivilege()
+
 	creds, err := LoadCredentials(stateDir)
 	if err != nil {
 		return nil, err
@@ -173,6 +201,30 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 			return
 		}
 		a.cfg.applyServerJobs(upd.Jobs)
+
+	case proto.MsgCancelRun:
+		cancel, err := unmarshalMsg[proto.CancelRun](env.Data)
+		if err != nil {
+			log.Printf("bad cancel_run message: %v", err)
+			return
+		}
+		a.runMu.Lock()
+		match := a.currentRunID == cancel.RunID && a.cancelRun != nil
+		cancelFn := a.cancelRun
+		a.runMu.Unlock()
+		if match {
+			log.Printf("[run %s] cancellation requested", cancel.RunID)
+			cancelFn()
+		}
+
+	case proto.MsgDiscoverDocker:
+		cmd, err := unmarshalMsg[proto.DiscoverDocker](env.Data)
+		if err != nil {
+			log.Printf("bad discover_docker message: %v", err)
+			return
+		}
+		// Read-only and quick, but it must not block the socket read loop.
+		go a.handleDiscoverDocker(cmd)
 
 	default:
 		log.Printf("unknown message type %q", env.Type)

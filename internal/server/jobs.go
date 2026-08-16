@@ -105,7 +105,7 @@ func validateJob(j *proto.Job) error {
 // FullEvery-th run is a full (which re-reads and re-verifies every file);
 // the first-ever run of a job is always effectively full.
 func (s *Server) scheduledMode(row *store.JobRow) string {
-	if _, err := s.store.LatestSnapshot(row.Job.ID); err == store.ErrNotFound {
+	if _, err := s.store.LatestSnapshot(s.backendKey(), row.Job.ID); err == store.ErrNotFound {
 		return proto.ModeFull
 	}
 	if row.Job.FullEvery > 0 && row.RunCount%int64(row.Job.FullEvery) == 0 {
@@ -158,7 +158,7 @@ func (s *Server) startBackup(row *store.JobRow, mode string, queue bool) (runID 
 
 func (s *Server) sendRunBackup(runID string, job proto.Job, mode string) {
 	prevID := ""
-	if prev, err := s.store.LatestSnapshot(job.ID); err == nil {
+	if prev, err := s.store.LatestSnapshot(s.backendKey(), job.ID); err == nil {
 		prevID = prev.ID
 	}
 	ok := s.hub.Send(job.AgentID, proto.MsgRunBackup, proto.RunBackup{
@@ -186,6 +186,29 @@ func (s *Server) startRestore(sn *store.Snapshot, paths []string, targetDir stri
 		return "", fmt.Errorf("failed to dispatch to agent")
 	}
 	return runID, nil
+}
+
+// cancelRun stops an in-progress or queued run. A queued run (agent
+// offline, nothing actually executing yet) is cancelled immediately
+// server-side; a running one is cancelled by asking the agent, which
+// reports back RunDone{Status: RunCancelled} once it stops — this function
+// does not mark it finished itself, to avoid racing the agent's own report.
+func (s *Server) cancelRun(runID string) error {
+	run, err := s.store.GetRun(runID)
+	if err != nil {
+		return err
+	}
+	switch run.Status {
+	case proto.RunQueued:
+		return s.store.FinishRun(run.ID, proto.RunCancelled, "", "cancelled before it started", proto.RunStats{})
+	case proto.RunRunning:
+		if !s.hub.Send(run.AgentID, proto.MsgCancelRun, proto.CancelRun{RunID: run.ID}) {
+			return fmt.Errorf("client is offline; cannot reach it to cancel (it will be marked failed if it doesn't reconnect)")
+		}
+		return nil
+	default:
+		return fmt.Errorf("run is not in progress")
+	}
 }
 
 // dispatchPendingWork runs when an agent (re)connects: sends queued runs

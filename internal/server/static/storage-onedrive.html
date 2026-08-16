@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect OneDrive — Central Backup</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>body{max-width:800px;margin:2rem auto;padding:0 1rem} li{margin:.4rem 0}</style>
+</head>
+<body>
+<h1>Connecting OneDrive (or OneDrive for Business)</h1>
+<p>Central Backup stores backups in your own Microsoft account using an
+OAuth app that <b>you</b> register once. This keeps your data in your
+tenant and avoids any shared credentials. It works for both personal
+OneDrive and OneDrive for Business (Microsoft 365).</p>
+
+<div class="card" style="border-color:var(--warn)">
+<b>⚠ Your server needs a DNS hostname, not a bare IP address.</b>
+<p style="margin:.4rem 0 0">Microsoft rejects redirect URIs that use a raw
+IP address (e.g. <code>https://87.106.150.130:8443/…</code>) — the
+authorization fails with <code>invalid_request</code>. The redirect URL
+must use a hostname such as <code>https://backup.example.com:8443/…</code>.
+Point a domain (or a free dynamic-DNS name) at your server, set
+<code>CB_SERVER_NAME</code> to it, restart the server, and open the GUI via
+that hostname before connecting. The same applies to Google Drive.</p>
+</div>
+
+<h2>1. Register an app in Azure</h2>
+<ol>
+  <li>Go to the <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure app registrations</a> page (search "App registrations" in the Azure / Entra portal) and click <b>New registration</b>.</li>
+  <li>Name it e.g. <code>Central Backup</code>.</li>
+  <li>Under <b>Supported account types</b>, choose:
+    <ul>
+      <li><b>OneDrive for Business / M365 only:</b> "Accounts in this organizational directory only".</li>
+      <li><b>Personal OneDrive (or both):</b> "Accounts in any organizational directory and personal Microsoft accounts".</li>
+    </ul>
+  </li>
+  <li>Under <b>Redirect URI</b>, pick platform <b>Web</b> and paste the redirect URL shown on the Settings page (it looks like
+    <code>https://your-server:8443/api/admin/storage/oauth/callback</code>). It must match exactly.</li>
+  <li>Click <b>Register</b>.</li>
+</ol>
+
+<h2>2. Add API permissions</h2>
+<ol>
+  <li>In the app, open <b>API permissions</b> → <b>Add a permission</b> → <b>Microsoft Graph</b> → <b>Delegated permissions</b>.</li>
+  <li>Add: <code>Files.ReadWrite</code>, <code>offline_access</code>, and <code>User.Read</code>.</li>
+  <li>(Business only) If your tenant requires it, click <b>Grant admin consent</b>.</li>
+</ol>
+
+<h2>3. Create a client secret</h2>
+<ol>
+  <li>Open <b>Certificates &amp; secrets</b> → <b>New client secret</b>. Give it a description and expiry, then <b>Add</b>.</li>
+  <li>Copy the secret <b>Value</b> immediately (it is only shown once).</li>
+  <li>From the app's <b>Overview</b> page, copy the <b>Application (client) ID</b>.</li>
+</ol>
+
+<h2>4. Connect in Central Backup</h2>
+<ol>
+  <li>Back on the Settings page, select provider <b>OneDrive</b>.</li>
+  <li>Paste the Client ID and Client secret, optionally set a destination folder (default <code>central-backup</code>), and click <b>Save app credentials</b>.</li>
+  <li>Click <b>Connect &amp; authorise</b>, sign in with the Microsoft account that owns the OneDrive, and approve.</li>
+  <li>You will be returned to Settings showing "connected as &lt;your account&gt;". New backups now go to that OneDrive.</li>
+</ol>
+
+<h2>Notes</h2>
+<ul>
+  <li><b>Existing backups are not moved.</b> Snapshots written before the switch stay on the previous backend.</li>
+  <li>Client secrets expire (per the expiry you chose). Before it lapses, create a new secret and re-save + reconnect.</li>
+  <li>Backups are stored as ordinary files under the destination folder; you can see them in OneDrive but should not edit them.</li>
+</ul>
+<p><a href="/settings">← Back to Settings</a></p>
+</body>
+</html>

@@ -3,7 +3,7 @@
 # Exercises: setup, login, enrollment (fingerprint pin), server-side job
 # creation, remote "back up now" (full + incremental), client-side job
 # config sync (both directions), restore to alternate dir, zip download,
-# snapshot deletion and GC.
+# cancelling a run mid-flight, snapshot deletion and GC.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -116,7 +116,7 @@ pass "server job synced into agent.yaml"
 say "Full backup (remote run-now)"
 RUN1=$(capi POST "/api/admin/jobs/$JOB_ID/run" '{"mode":"full"}' | jq -r .run_id)
 run_status() { capi GET "/api/admin/runs/$1" | jq -r .run.Status; }
-run_finished() { [[ "$(run_status "$1")" =~ ^(success|partial|error)$ ]]; }
+run_finished() { [[ "$(run_status "$1")" =~ ^(success|partial|error|cancelled)$ ]]; }
 wait_for 30 "full run to finish" run_finished "$RUN1"
 [ "$(run_status "$RUN1")" = success ] || { cat "$WORK/agent.log"; fail "full run: $(capi GET /api/admin/runs/$RUN1)"; }
 SNAP1=$(capi GET "/api/admin/runs/$RUN1" | jq -r .run.SnapshotID)
@@ -169,6 +169,46 @@ diff -r --no-dereference "$FIX" "$RESTORED_ROOT" >"$WORK/diff.out" 2>&1 || {
 cmp "$FIX/sub/big.bin" "$RESTORED_ROOT/sub/big.bin" || fail "big.bin corrupt after restore"
 [ "$(readlink "$RESTORED_ROOT/link")" = "a.txt" ] || fail "symlink not restored"
 pass "restore matches source (incl. 300KB binary + symlink)"
+
+say "Cancel a running backup"
+CANCEL_FIX="$WORK/cancel-fixture"
+mkdir -p "$CANCEL_FIX"
+for i in 1 2 3 4; do
+    head -c 83886080 /dev/urandom > "$CANCEL_FIX/big$i.bin"  # 4 x 80MB
+done
+CJOB=$(capi POST /api/admin/jobs "{\"agent_id\":\"$AGENT_ID\",\"name\":\"cancel-test\",\"paths\":[\"$CANCEL_FIX\"],\"enabled\":true}")
+CJOB_ID=$(echo "$CJOB" | jq -r .id)
+[ -n "$CJOB_ID" ] && [ "$CJOB_ID" != null ] || fail "cancel-test job create: $CJOB"
+
+CRUN=$(capi POST "/api/admin/jobs/$CJOB_ID/run" '{"mode":"full"}' | jq -r .run_id)
+[ -n "$CRUN" ] && [ "$CRUN" != null ] || fail "could not start run to cancel"
+
+# Poll until we actually observe it running, then cancel immediately - this
+# is tighter and less flaky than a blind sleep-then-cancel.
+cancel_sent=0
+for i in $(seq 1 500); do
+    st=$(capi GET "/api/admin/runs/$CRUN" | jq -r .run.Status)
+    if [ "$st" = running ]; then
+        capi POST "/api/admin/runs/$CRUN/cancel" | jq -e .ok >/dev/null || fail "cancel request failed"
+        cancel_sent=1
+        break
+    fi
+    if [[ "$st" =~ ^(success|partial|error|cancelled)$ ]]; then
+        break # finished before we could catch it running
+    fi
+    sleep 0.01
+done
+[ "$cancel_sent" = 1 ] || fail "backup finished before it could be cancelled (fixture too small/fast for this environment)"
+
+wait_for 30 "cancelled run to finish" run_finished "$CRUN"
+CSTATUS=$(run_status "$CRUN")
+[ "$CSTATUS" = cancelled ] || { cat "$WORK/agent.log"; fail "expected status cancelled, got $CSTATUS"; }
+CSNAP=$(capi GET "/api/admin/runs/$CRUN" | jq -r .run.SnapshotID)
+[ -z "$CSNAP" ] || [ "$CSNAP" = null ] || fail "cancelled run unexpectedly has a snapshot: $CSNAP"
+CSNAP_COUNT=$(capi GET "/api/admin/snapshots?job=$CJOB_ID" | jq -r 'length')
+[ "$CSNAP_COUNT" = 0 ] || fail "cancelled run left $CSNAP_COUNT snapshot(s) behind"
+pass "backup cancelled mid-flight: no snapshot created"
+rm -f "$CANCEL_FIX"/*.bin
 
 say "Client-side job config (agent.yaml -> server)"
 "$WORK/backup-agent" job add --name local-job --path "$FIX/sub" \

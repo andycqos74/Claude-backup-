@@ -26,7 +26,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{store: st, storage: backend, hub: newHub()}
+	return &Server{store: st, storageActive: backend, storageBackendID: "local", hub: newHub()}
 }
 
 // putManifest stores a manifest referencing the given hashes and records
@@ -41,11 +41,11 @@ func putManifest(t *testing.T, s *Server, snapID, jobID string, hashes ...string
 	}
 	enc.Close()
 	key := storage.ManifestKey(snapID)
-	if _, err := s.storage.Put(key, &buf); err != nil {
+	if _, err := s.backend().Put(key, &buf); err != nil {
 		t.Fatal(err)
 	}
 	err := s.store.CreateSnapshot(store.Snapshot{
-		ID: snapID, JobID: jobID, AgentID: "a1", Mode: proto.ModeFull,
+		ID: snapID, Backend: s.backendKey(), JobID: jobID, AgentID: "a1", Mode: proto.ModeFull,
 		Files: int64(len(hashes)), ManifestKey: key,
 	})
 	if err != nil {
@@ -55,10 +55,10 @@ func putManifest(t *testing.T, s *Server, snapID, jobID string, hashes ...string
 
 func addBlob(t *testing.T, s *Server, hash string) {
 	t.Helper()
-	if _, err := s.storage.Put(storage.BlobKey(hash), bytes.NewReader([]byte("x"))); err != nil {
+	if _, err := s.backend().Put(storage.BlobKey(hash), bytes.NewReader([]byte("x"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.store.AddBlob(hash, 1, 1); err != nil {
+	if err := s.store.AddBlob(s.backendKey(), hash, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -80,17 +80,17 @@ func TestGCBlobs(t *testing.T) {
 	if err := s.gcBlobs(); err != nil {
 		t.Fatal(err)
 	}
-	blobs, _ := s.store.AllBlobs()
+	blobs, _ := s.store.AllBlobs("local")
 	if len(blobs) != 2 || blobs[h(3)] != 0 && len(blobs) == 3 {
 		t.Fatalf("expected blob %s swept, have %v", h(3), blobs)
 	}
 	if _, ok := blobs[h(1)]; !ok {
 		t.Fatal("referenced blob swept")
 	}
-	if ok, _ := s.storage.Has(storage.BlobKey(h(3))); ok {
+	if ok, _ := s.backend().Has(storage.BlobKey(h(3))); ok {
 		t.Fatal("swept blob still in storage")
 	}
-	if ok, _ := s.storage.Has(storage.BlobKey(h(1))); !ok {
+	if ok, _ := s.backend().Has(storage.BlobKey(h(1))); !ok {
 		t.Fatal("referenced blob removed from storage")
 	}
 }
@@ -106,7 +106,7 @@ func TestGCGracePeriod(t *testing.T) {
 	if err := s.gcBlobs(); err != nil {
 		t.Fatal(err)
 	}
-	blobs, _ := s.store.AllBlobs()
+	blobs, _ := s.store.AllBlobs("local")
 	if _, ok := blobs[h]; !ok {
 		t.Fatal("fresh unreferenced blob swept inside grace period")
 	}
@@ -128,7 +128,7 @@ func TestPruneRetentionKeepLast(t *testing.T) {
 	if err := s.pruneRetention(); err != nil {
 		t.Fatal(err)
 	}
-	snaps, _ := s.store.ListSnapshots("", "job1")
+	snaps, _ := s.store.ListSnapshots("local", "", "job1")
 	if len(snaps) != 2 {
 		t.Fatalf("expected 2 snapshots after prune, have %d", len(snaps))
 	}
@@ -137,7 +137,7 @@ func TestPruneRetentionKeepLast(t *testing.T) {
 		t.Fatalf("kept wrong snapshots: %s, %s", snaps[0].ID, snaps[1].ID)
 	}
 	// Their manifests must be gone from storage.
-	if ok, _ := s.storage.Has(storage.ManifestKey("snap1")); ok {
+	if ok, _ := s.backend().Has(storage.ManifestKey("snap1")); ok {
 		t.Fatal("pruned snapshot manifest still in storage")
 	}
 }
@@ -157,7 +157,7 @@ func TestPruneNoPolicyKeepsAll(t *testing.T) {
 	if err := s.pruneRetention(); err != nil {
 		t.Fatal(err)
 	}
-	snaps, _ := s.store.ListSnapshots("", "job1")
+	snaps, _ := s.store.ListSnapshots("local", "", "job1")
 	if len(snaps) != 3 {
 		t.Fatalf("no-policy job lost snapshots: %d left", len(snaps))
 	}
@@ -173,7 +173,7 @@ func TestSnapshotTreeAndZipHelpers(t *testing.T) {
 	je.Encode(proto.ManifestEntry{Type: "f", Path: "/home/u/sub/b.txt", Size: 4, Hash: "h2"})
 	enc.Close()
 	key := storage.ManifestKey("snapT")
-	s.storage.Put(key, &buf)
+	s.backend().Put(key, &buf)
 	sn := &store.Snapshot{ID: "snapT", ManifestKey: key}
 
 	root, err := s.snapshotTree(sn, "")
