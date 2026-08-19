@@ -65,8 +65,10 @@ el('sel-all').addEventListener('change', (e) => {
   });
 });
 function downloadZip() {
-  const paths = selectionPaths();
-  const q = paths.length ? '&paths=' + encodeURIComponent(paths.join('\x00')) : '';
+  // One parameter per path. A single NUL-separated parameter looked
+  // tidier but the separator can be stripped in transit, which silently
+  // reduced the selection to its first entry.
+  const q = selectionPaths().map(p => '&path=' + encodeURIComponent(p)).join('');
   location.href = `/api/admin/snapshots/${snapID}/download?zip=1` + q;
 }
 document.getElementById('restore-form').addEventListener('submit', async (e) => {

@@ -476,9 +476,17 @@ func (s *Server) handleSnapshotDownload(w http.ResponseWriter, r *http.Request) 
 	q := r.URL.Query()
 
 	if q.Get("zip") == "1" {
-		var prefixes []string
-		if p := q.Get("paths"); p != "" {
-			prefixes = strings.Split(p, "\x00")
+		// Repeated ?path= parameters. The selection used to be one
+		// parameter with NUL separators, which browsers and proxies are
+		// entitled to strip from a URL — when that happened only the first
+		// entry survived and the zip silently contained just that folder.
+		// The NUL form is still accepted so an old page in a stale tab
+		// keeps working.
+		prefixes := q["path"]
+		if len(prefixes) == 0 {
+			if p := q.Get("paths"); p != "" {
+				prefixes = strings.Split(p, "\x00")
+			}
 		}
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "snapshot-"+sn.ID+".zip"))
