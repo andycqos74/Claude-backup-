@@ -307,6 +307,7 @@ certificate fingerprint, so nothing has to be copied onto the client:
 ```
 Windows (elevated PowerShell):  .\backup-agent-installer.exe install
 Windows 32-bit:                 .\backup-agent-installer-x86.exe install
+Windows 7 / POSReady (32-bit):  .\backup-agent-installer-x86-win7.exe install
 Linux:                          chmod +x backup-agent-installer
                                 sudo ./backup-agent-installer install
 ```
@@ -331,11 +332,32 @@ Use it **only on a genuinely 32-bit Windows install**:
   `C:\Windows\System32` are silently redirected to `SysWOW64`. The backup
   would appear to succeed while capturing the wrong system directory. Take
   the x64 build on those machines.
-- Bitness doesn't change the OS floor: the agent is built with Go 1.25 and
-  needs **Windows 10 / Server 2016 or newer** either way. It will not run on
-  XP, Vista, 7 or Server 2008.
+- Bitness doesn't change the OS floor: the standard agent is built with Go
+  1.25 and needs **Windows 10 / Server 2016 or newer** either way. On Windows
+  7 or Server 2008 it crashes at startup (an access violation in
+  `runtime.asmstdcall` — the runtime calling a kernel API the OS lacks). For
+  those, use the Windows 7 build below.
 - The paste-a-command route (`install-agent.ps1`) always fetches the x64
   binary. On a 32-bit client, use the installer download instead.
+
+#### Windows 7 / Embedded POSReady 7
+
+The **Windows 7 / POSReady (32-bit)** button serves a separate *legacy* build
+(`backup-agent-installer-x86-win7.exe`) for **Windows 7 SP1** and **Windows
+Embedded POSReady 7** (both NT 6.1), the common OS on older 32-bit POS and
+embedded terminals. It is compiled with the Go 1.20 toolchain — the last that
+targets Windows 7 — which stamps the executable for OS version 6.1 so it
+loads and runs there, unlike the standard builds.
+
+- Use it **only** on genuinely pre-Windows-10 systems; on Windows 10+ prefer
+  the standard builds, which get current Go runtime and security fixes.
+- It is produced by `scripts/build-legacy-agent.sh` (invoked by the release
+  build and the Docker image build). A server image built without it simply
+  reports "no prebuilt agent for that platform" when the button is used —
+  rebuild with the script available, or run it and drop the binary into the
+  server's `CB_AGENT_BIN_DIR`.
+- Everything else is identical: same self-enrolling installer, same service
+  (`CentralBackupAgent`), same backup/restore/transfer behaviour.
 
 ### Alternative: a ready-to-paste command
 
