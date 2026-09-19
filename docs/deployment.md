@@ -74,8 +74,11 @@ Windows notes:
   port-forward / firewall). Nothing needs to be opened on the clients.
 - Clients must reach that port **directly**. Do not put a Cloudflare Tunnel,
   Cloudflare's orange-cloud proxy, or any other TLS-terminating reverse
-  proxy in front of the server — see
+  proxy in front of *that* address — see
   [§3 Reverse proxies, tunnels and Cloudflare](#3-reverse-proxies-tunnels-and-cloudflare).
+  The **web GUI** is a separate matter: it can be served through a tunnel
+  with a browser-trusted certificate, and usually should be. See
+  [cloudflared.md](cloudflared.md).
 
 ---
 
@@ -166,33 +169,49 @@ journalctl -u backup-server -f
 
 ## 3. Reverse proxies, tunnels and Cloudflare
 
-**Short version: don't put a TLS-terminating proxy in front of this
-server.** Agents verify the server by pinning the SHA-256 fingerprint of
-the certificate they are handed. Any middlebox that terminates TLS presents
+**Short version: the GUI can go behind a tunnel; agent traffic cannot.**
+
+Agents verify the server by pinning the SHA-256 fingerprint of the
+certificate they are handed. Any middlebox that terminates TLS presents
 *its own* certificate, so the pin fails and agents refuse to connect. This
 is the intended behaviour — it is what makes a self-signed certificate safe
 without a CA.
 
-This rules out, for the address clients use:
+That applies to the address **clients** use. The operator's **browser** has
+no such constraint, so the server can run a second, GUI-only listener
+(`CB_GUI_LISTEN`) for a TLS-terminating proxy to sit in front of, while
+agents keep reaching port 8443 directly. That listener deliberately does
+not serve `/api/agent/*`, so a tunnel cannot expose enrollment or blob
+storage.
+
+- **GUI behind Cloudflare Tunnel / `cloudflared`, with a real certificate
+  and no inbound port** — supported, and the recommended way to get rid of
+  the self-signed warning. Full setup: [cloudflared.md](cloudflared.md).
+- **nginx / Traefik / Caddy in front of the GUI** — same idea: point them
+  at `CB_GUI_LISTEN` (plain HTTP, bound to loopback), not at 8443.
+- **Agents through any of the above** — will not work, by design.
+
+For the **client-facing** address, this still rules out:
 
 - **Cloudflare Tunnel / `cloudflared`** — terminates TLS at Cloudflare's edge.
 - **Cloudflare proxied DNS** (the orange cloud) — same.
 - **nginx / Traefik / Caddy doing TLS termination** — same, unless you give
   the proxy the server's own certificate and key.
 
-Using Cloudflare purely as a **DNS host is fine and recommended** — just set
-the record to **DNS only (grey cloud)** so it resolves straight to your
-server's IP.
+Using Cloudflare as a **DNS host for the agent hostname is fine** — set
+that record to **DNS only (grey cloud)** so it resolves straight to your
+server's IP. The GUI hostname is a separate record, and that one is
+proxied/tunnelled.
 
 ### Symptoms of getting this wrong
 
 | Symptom | Cause |
 |---|---|
-| `Client sent an HTTP request to an HTTPS server` | The proxy is speaking plain HTTP to the origin. This server is HTTPS-only — there is no HTTP listener. |
-| Agent logs `server certificate fingerprint mismatch` | TLS is being terminated by something other than this server. |
+| `Client sent an HTTP request to an HTTPS server` | A proxy is speaking plain HTTP to port 8443, which is HTTPS-only. If it is fronting the GUI, point it at `CB_GUI_LISTEN` instead. |
+| Agent logs `server certificate fingerprint mismatch` | TLS is being terminated by something other than this server. Agents must use the direct `:8443` address, never the GUI's tunnel hostname. |
 | OAuth fails with `invalid_request` / redirect-URI mismatch | The redirect URI seen by the provider isn't the one registered. |
 
-### Correct setup
+### Correct setup (agent-facing address)
 
 1. **DNS**: an `A` record for your hostname pointing at the server's public
    IP, **not proxied**.
@@ -254,14 +273,21 @@ unless you serve on 443. The server refuses to start on a malformed value.
 
 ### If you genuinely can't expose a port
 
-If the server has no public IP or inbound 8443 is blocked upstream, a
-tunnel is not a workaround — pinning will still fail. The options are a
-VPN/WireGuard link between clients and server (agents then connect to the
-server's private address), or a proxy configured for **TCP passthrough**
-(e.g. nginx `stream` with `proxy_pass`, no `ssl_certificate`), which
-forwards the bytes without terminating TLS and so preserves the pin.
+If the server has no public IP or inbound 8443 is blocked upstream, an
+HTTP tunnel is not a workaround for *agent* traffic — pinning will still
+fail. The options are a VPN/WireGuard link between clients and server
+(agents then connect to the server's private address), a proxy configured
+for **TCP passthrough** (e.g. nginx `stream` with `proxy_pass`, no
+`ssl_certificate`), or `cloudflared access tcp` on each client — all three
+forward bytes without terminating TLS and so preserve the pin. See
+[cloudflared.md](cloudflared.md#if-you-cannot-open-8443-at-all).
 
-### Removing an existing tunnel
+### Removing a tunnel from the agent address
+
+If agents were pointed at a tunnel hostname (they will be failing the
+fingerprint check), move them to the direct address. Note this is only
+about the *agent* address — a tunnel serving the GUI via `CB_GUI_LISTEN`
+stays exactly where it is.
 
 Do it in this order so the GUI stays reachable throughout: publish 8443 and
 open the firewall first, confirm direct access works by IP, flip DNS to

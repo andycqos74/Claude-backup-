@@ -1,0 +1,44 @@
+# Cloudflare Tunnel overlay — puts the *web GUI* behind Cloudflare's
+# certificate, with no inbound port and no self-signed warning.
+#
+#   CB_SERVER_NAME=backup.example.com \
+#   CB_PUBLIC_URL=https://backup.example.com:8443 \
+#   CB_GUI_URL=https://gui.example.com \
+#   CB_TUNNEL_TOKEN=<token from the Cloudflare dashboard> \
+#     docker compose -f deploy/docker-compose.yml \
+#                    -f deploy/docker-compose.cloudflared.yml up -d
+#
+# In the Cloudflare dashboard (Zero Trust → Networks → Tunnels → your tunnel
+# → Public hostname), route your GUI hostname to:
+#
+#     Service type: HTTP     URL: backup-server:8080
+#
+# HTTP, not HTTPS: the tunnel runs on the same Docker network as the server
+# and reaches its GUI listener, which is plain HTTP on purpose. That port is
+# never published to the host — only cloudflared can reach it.
+#
+# IMPORTANT — agents do not go through the tunnel. They pin the server's
+# certificate fingerprint, and Cloudflare terminates TLS with its own
+# certificate, so a tunnelled agent can never verify the server. Port 8443
+# stays published and reachable directly, and CB_PUBLIC_URL must be that
+# direct address. See docs/cloudflared.md.
+services:
+  backup-server:
+    environment:
+      # GUI-only listener for cloudflared. Serves the web GUI and admin API;
+      # the agent endpoints are deliberately not registered on it.
+      CB_GUI_LISTEN: ":8080"
+      # The address the operator's browser uses. Baked into the storage
+      # OAuth redirect URL, which must match what the provider sees.
+      CB_GUI_URL: ${CB_GUI_URL:?set CB_GUI_URL to the tunnel hostname, e.g. https://gui.example.com}
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: backup-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      # Zero Trust → Networks → Tunnels → your tunnel → Install connector.
+      TUNNEL_TOKEN: ${CB_TUNNEL_TOKEN:?set CB_TUNNEL_TOKEN to the tunnel token from the Cloudflare dashboard}
+    depends_on:
+      - backup-server

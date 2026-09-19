@@ -38,6 +38,11 @@ compressed and deduplicated, stored on the server's local storage.
   server certificate's fingerprint (self-signed certs are safe);
   enrollment uses one-time tokens; every blob is hash-verified on upload
   and restore.
+- **GUI behind real SSL**: an optional GUI-only listener lets
+  `cloudflared` (or any reverse proxy) serve the web interface over a
+  browser-trusted certificate — no self-signed warning, no inbound port —
+  without breaking the agents' certificate pinning, since the agent API is
+  not served on it. See [docs/cloudflared.md](docs/cloudflared.md).
 - **Retention** per job (keep last N / newer than N days) with automatic
   garbage collection.
 - **File transfer with a client**: browse a client's filesystem from the GUI
@@ -79,10 +84,14 @@ CB_PUBLIC_URL=https://backup.example.com:8443 \
 - All state lives in the `backup-data` volume (`/data`): SQLite database,
   TLS certificate and backup storage. Mount a big disk there.
 - Remote clients must be able to reach port 8443 on this machine — that is
-  the **only** port the whole system needs. Reach it **directly**: agents
-  pin the server's certificate fingerprint, so a Cloudflare Tunnel or any
-  other TLS-terminating proxy in front of the server will break them. See
-  [docs/deployment.md](docs/deployment.md#3-reverse-proxies-tunnels-and-cloudflare).
+  the **only** port the whole system needs. Agents must reach it
+  **directly**: they pin the server's certificate fingerprint, so a
+  Cloudflare Tunnel or any other TLS-terminating proxy in front of *that*
+  address will break them.
+- The **web GUI** is a different matter, and can sit behind a real
+  certificate with no inbound port at all: run the GUI-only listener and
+  put `cloudflared` (or nginx/Caddy) in front of it, while agents keep
+  using 8443 directly. See [docs/cloudflared.md](docs/cloudflared.md).
 
 Prefer not to use Docker? The server is a single static binary — run
 `sudo CB_SERVER_NAME=… scripts/install-server.sh` for a systemd install
@@ -175,7 +184,7 @@ clients) are stored once.
 | `internal/server/storage` | storage backends (localfs) |
 | `internal/agent` | connection, backup/restore engine, agent.yaml sync |
 | `internal/proto` | shared protocol types |
-| `deploy/` | Dockerfiles and compose files |
+| `deploy/` | Dockerfiles, compose files, cloudflared config |
 | `scripts/` | release build |
 | `docs/` | security model, operations, roadmap |
 
@@ -191,6 +200,8 @@ See [docs/deployment.md](docs/deployment.md) for the deploy runbook,
 [docs/docker-backups.md](docs/docker-backups.md) for backing up a Docker
 host (volumes, bind mounts, database dumps),
 [docs/storage.md](docs/storage.md) for cloud storage backends,
+[docs/cloudflared.md](docs/cloudflared.md) for putting the GUI behind
+Cloudflare Tunnel,
 [docs/security.md](docs/security.md) for the security model,
 [docs/operations.md](docs/operations.md) for day-2 operations and
 [docs/roadmap.md](docs/roadmap.md) for planned work (Box, off-site mirror,

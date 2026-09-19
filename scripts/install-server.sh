@@ -16,6 +16,11 @@ DATA_DIR="${CB_DATA_DIR:-/var/lib/backup-server}"
 LISTEN="${CB_LISTEN:-:8443}"
 SERVER_NAME="${CB_SERVER_NAME:-}"
 PUBLIC_URL="${CB_PUBLIC_URL:-}"
+# Optional GUI-only plain-HTTP listener for a local TLS-terminating proxy
+# (cloudflared, nginx). Keep it on loopback: it must not be reachable from
+# the network. See docs/cloudflared.md.
+GUI_LISTEN="${CB_GUI_LISTEN:-}"
+GUI_URL="${CB_GUI_URL:-}"
 
 echo "Building server binary..."
 CGO_ENABLED=0 go build -ldflags "-s -w -X centralbackup/internal/agent.Version=$(git describe --tags --always 2>/dev/null || echo dev)" \
@@ -44,6 +49,8 @@ Environment=CB_LISTEN=$LISTEN
 Environment=CB_AGENT_BIN_DIR=$DATA_DIR/agents
 Environment=CB_SERVER_NAME=$SERVER_NAME
 Environment=CB_PUBLIC_URL=$PUBLIC_URL
+Environment=CB_GUI_LISTEN=$GUI_LISTEN
+Environment=CB_GUI_URL=$GUI_URL
 Restart=always
 RestartSec=5
 
@@ -60,4 +67,9 @@ echo "  status:      systemctl status backup-server"
 echo "  logs:        journalctl -u backup-server -f"
 echo "  fingerprint: journalctl -u backup-server | grep -i fingerprint | tail -1"
 echo
-echo "Open https://${SERVER_NAME:-<this-host>}${LISTEN} and create the admin account."
+if [ -n "$GUI_LISTEN" ]; then
+    echo "GUI listener (plain HTTP, for a local proxy) on $GUI_LISTEN — do not expose it directly."
+    echo "Open ${GUI_URL:-your proxied GUI address} and create the admin account."
+else
+    echo "Open https://${SERVER_NAME:-<this-host>}${LISTEN} and create the admin account."
+fi

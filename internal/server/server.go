@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,10 +22,12 @@ import (
 
 type Config struct {
 	Listen     string // e.g. ":8443"
+	GUIListen  string // optional plain-HTTP GUI-only listener, e.g. "127.0.0.1:8080"
 	DataDir    string // sqlite db, tls certs
 	StorageDir string // blob/manifest storage root (localfs backend)
 	ServerName string // comma-separated extra SANs for the generated cert
-	PublicURL  string // externally reachable origin, e.g. https://backup.example.com:8443
+	PublicURL  string // externally reachable origin for agents, e.g. https://backup.example.com:8443
+	GUIURL     string // browser-facing origin of the GUI when proxied, e.g. https://backup.example.com
 	CertFile   string // optional externally provided cert
 	KeyFile    string
 	AgentBins  string // directory of prebuilt agent binaries served at /dl/
@@ -40,10 +43,12 @@ func ConfigFromEnv() Config {
 	dataDir := get("CB_DATA_DIR", "./data")
 	return Config{
 		Listen:     get("CB_LISTEN", ":8443"),
+		GUIListen:  get("CB_GUI_LISTEN", ""),
 		DataDir:    dataDir,
 		StorageDir: get("CB_STORAGE_DIR", filepath.Join(dataDir, "storage")),
 		ServerName: get("CB_SERVER_NAME", ""),
 		PublicURL:  get("CB_PUBLIC_URL", ""),
+		GUIURL:     get("CB_GUI_URL", ""),
 		CertFile:   get("CB_TLS_CERT", ""),
 		KeyFile:    get("CB_TLS_KEY", ""),
 		AgentBins:  get("CB_AGENT_BIN_DIR", "./agents"),
@@ -98,6 +103,27 @@ func New(cfg Config) (*Server, error) {
 	}
 	cfg.PublicURL = publicURL
 
+	guiURL, err := normalizeGUIURL(cfg.GUIURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.GUIURL = guiURL
+
+	if cfg.GUIListen != "" {
+		if _, _, err := net.SplitHostPort(cfg.GUIListen); err != nil {
+			return nil, fmt.Errorf("CB_GUI_LISTEN is not a host:port address (got %q): %w", cfg.GUIListen, err)
+		}
+		// The GUI listener exists to be fronted by a TLS-terminating proxy,
+		// whose hostname is not an address agents can pin. Without an
+		// explicit agent address, enrollment commands would fall back to
+		// CB_SERVER_NAME and quietly depend on it being right.
+		if cfg.PublicURL == "" {
+			return nil, fmt.Errorf("CB_GUI_LISTEN is set, so CB_PUBLIC_URL is required: " +
+				"it is the direct address agents connect to (e.g. https://backup.example.com:8443), " +
+				"which is never the proxied GUI address")
+		}
+	}
+
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -137,10 +163,12 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Run() error {
-	mux := http.NewServeMux()
-
-	// Agent endpoints (authenticated by agent id + secret).
+// registerAgentAPI registers the agent-facing endpoints (authenticated by
+// agent id + secret). These are deliberately absent from the GUI listener:
+// agents pin this server's certificate fingerprint, so they must always
+// reach it directly rather than through a TLS-terminating proxy, and a
+// proxied GUI should not expose enrollment or blob storage to the internet.
+func (s *Server) registerAgentAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/agent/enroll", s.handleEnroll)
 	mux.HandleFunc("GET /api/agent/ws", s.handleAgentWS)
 	mux.HandleFunc("POST /api/agent/blobs/check", s.agentAuth(s.handleBlobCheck))
@@ -150,16 +178,34 @@ func (s *Server) Run() error {
 	mux.HandleFunc("GET /api/agent/manifests/{id}", s.agentAuth(s.handleManifestGet))
 	mux.HandleFunc("GET /api/agent/transfers/{id}/content", s.agentAuth(s.handleTransferContent))
 	mux.HandleFunc("PUT /api/agent/transfers/{id}/content", s.agentAuth(s.handleTransferUpload))
+}
 
-	// Admin API (session cookie).
+// registerGUI registers everything an operator's browser needs: the web GUI,
+// the admin API (session cookie) and the install scripts and prebuilt agent
+// binaries the enrollment dialog links to.
+func (s *Server) registerGUI(mux *http.ServeMux) {
 	s.registerAdminAPI(mux)
 	s.registerStorageAPI(mux)
-
-	// Web GUI.
 	s.web.register(mux)
 
 	// Prebuilt agent binaries for the install scripts (not secret).
 	mux.Handle("GET /dl/", http.StripPrefix("/dl/", http.FileServer(http.Dir(s.cfg.AgentBins))))
+}
+
+// guiHandler is the handler for the optional plain-HTTP GUI listener
+// (CB_GUI_LISTEN): the GUI half of the routes, with every request tagged as
+// proxied so nothing derives an agent-facing URL from the proxy's Host
+// header.
+func (s *Server) guiHandler() http.Handler {
+	mux := http.NewServeMux()
+	s.registerGUI(mux)
+	return markGUIListener(mux)
+}
+
+func (s *Server) Run() error {
+	mux := http.NewServeMux()
+	s.registerAgentAPI(mux)
+	s.registerGUI(mux)
 
 	srv := &http.Server{
 		Addr:              s.cfg.Listen,
@@ -182,7 +228,26 @@ func (s *Server) Run() error {
 	go s.runScheduler()
 	go s.runMaintenance()
 
+	// Either listener failing is fatal, so the first error wins.
+	errc := make(chan error, 2)
+
+	if s.cfg.GUIListen != "" {
+		guiSrv := &http.Server{
+			Addr:              s.cfg.GUIListen,
+			Handler:           s.guiHandler(),
+			ReadHeaderTimeout: 30 * time.Second,
+		}
+		log.Printf("GUI listener (plain HTTP, for a local TLS-terminating proxy such as "+
+			"cloudflared) on http://%s — do not expose this port directly", s.cfg.GUIListen)
+		if s.cfg.GUIURL != "" {
+			log.Printf("GUI public address: %s", s.cfg.GUIURL)
+		}
+		go func() { errc <- fmt.Errorf("gui listener: %w", guiSrv.ListenAndServe()) }()
+	}
+
 	log.Printf("central backup server listening on https://%s", s.cfg.Listen)
 	log.Printf("TLS certificate SHA-256 fingerprint: %s", s.fingerprint)
-	return srv.ListenAndServeTLS("", "")
+	go func() { errc <- srv.ListenAndServeTLS("", "") }()
+
+	return <-errc
 }

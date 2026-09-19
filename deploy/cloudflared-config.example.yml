@@ -1,0 +1,30 @@
+# cloudflared config for a locally managed tunnel (the non-Docker route:
+# `cloudflared tunnel create backup-gui`, then run it as a service).
+#
+# Copy to /etc/cloudflared/config.yml, fill in the tunnel UUID and your
+# hostname, then:
+#
+#   cloudflared tunnel route dns backup-gui gui.example.com
+#   cloudflared service install
+#
+# The server must be started with CB_GUI_LISTEN=127.0.0.1:8080 (and
+# CB_GUI_URL=https://gui.example.com). See docs/cloudflared.md.
+
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/00000000-0000-0000-0000-000000000000.json
+
+ingress:
+  # Belt and braces: the GUI listener does not serve the agent API at all,
+  # but refusing it here too means a future misconfiguration can't quietly
+  # publish enrollment and blob storage to the internet.
+  - hostname: gui.example.com
+    path: ^/api/agent/
+    service: http_status:404
+
+  # The GUI listener. Plain HTTP on loopback: TLS is terminated by
+  # Cloudflare, and nothing but cloudflared can reach this port.
+  - hostname: gui.example.com
+    service: http://127.0.0.1:8080
+
+  # Required catch-all.
+  - service: http_status:404

@@ -4,11 +4,13 @@
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CB_LISTEN` | `:8443` | listen address |
+| `CB_LISTEN` | `:8443` | HTTPS listen address (GUI, admin API **and** agents) |
+| `CB_GUI_LISTEN` | – | optional plain-HTTP **GUI-only** listener for a local TLS-terminating proxy such as cloudflared, e.g. `127.0.0.1:8080`. Serves the GUI, admin API, `/static` and `/dl`, never `/api/agent/*`. Requires `CB_PUBLIC_URL`. Never expose this port directly — see [cloudflared.md](cloudflared.md) |
 | `CB_DATA_DIR` | `/data` (in Docker) | database, TLS cert, storage root |
 | `CB_STORAGE_DIR` | `$CB_DATA_DIR/storage` | blob/manifest storage |
 | `CB_SERVER_NAME` | – | extra SANs for the generated TLS certificate |
-| `CB_PUBLIC_URL` | – | externally reachable origin (e.g. `https://backup.example.com:8443`); pins the address used in enrollment commands and the OAuth redirect URL |
+| `CB_PUBLIC_URL` | – | the **direct** origin agents connect to (e.g. `https://backup.example.com:8443`); pins the address used in enrollment commands, downloaded installers and — unless `CB_GUI_URL` is set — the OAuth redirect URL |
+| `CB_GUI_URL` | – | the origin the operator's **browser** uses when the GUI is proxied (e.g. `https://gui.example.com`); used for the storage OAuth redirect URL. https only: the session cookie is `Secure` |
 | `CB_TLS_CERT` / `CB_TLS_KEY` | – | bring your own certificate |
 | `CB_AGENT_BIN_DIR` | `/app/agents` | prebuilt agent binaries served at `/dl/` |
 

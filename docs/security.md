@@ -7,6 +7,13 @@
   no VPN, no firewall changes on clients.
 - The server exposes exactly one TCP port (default 8443) for everything:
   GUI, API and agents.
+- Optionally, a second **GUI-only** listener (`CB_GUI_LISTEN`) serves plain
+  HTTP for a local TLS-terminating proxy such as `cloudflared`. It carries
+  the GUI, the admin API, `/static` and `/dl` — the agent endpoints
+  (`/api/agent/*`) are not registered on it, so a tunnel in front of the
+  GUI cannot reach enrollment, the control channel or blob storage. It is
+  meant to be bound to loopback (or an internal Docker network) and never
+  exposed directly: it has no transport security of its own.
 
 ## Server authenticity (why self-signed is safe here)
 
@@ -50,6 +57,13 @@ re-enrolling agents.
   header, which cross-site form posts cannot set (CSRF defence in depth).
 - First run: the `/setup` page creates the admin account; it is disabled
   as soon as one user exists.
+- The session cookie is `Secure`, so the GUI must be reached over https
+  (or loopback). Behind a proxy that means the *browser-facing* side must
+  be https — which is the point of putting the GUI behind a tunnel.
+- Exposing the GUI through a tunnel makes the login page reachable from
+  the internet. Put an identity layer in front of it (e.g. Cloudflare
+  Access) rather than relying on the password alone — see
+  [cloudflared.md](cloudflared.md#lock-the-gui-down-with-cloudflare-access).
 
 ## Data integrity
 

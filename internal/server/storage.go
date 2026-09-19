@@ -140,7 +140,7 @@ func (s *Server) applyStorageConfig(cfg storage.Config) error {
 // This request-free form is used by background token refresh; the
 // request-scoped handlers use oauthRedirectURLFromRequest.
 func (s *Server) oauthRedirectURL() string {
-	return s.publicBaseURL(nil) + oauthCallbackPath
+	return s.browserBaseURL(nil) + oauthCallbackPath
 }
 
 func indexByte(s string, b byte) int {

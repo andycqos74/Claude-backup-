@@ -355,9 +355,11 @@ func (s *Server) fetchAccountLabel(ctx context.Context, cfg storage.Config, acce
 }
 
 // oauthRedirectURLFromRequest is the callback URL to register with the
-// provider: CB_PUBLIC_URL when configured, otherwise the request's own host.
+// provider. Consent happens in the operator's browser, so this is the
+// browser-facing origin — CB_GUI_URL when the GUI is proxied, else
+// CB_PUBLIC_URL, else the request's own host.
 func (s *Server) oauthRedirectURLFromRequest(r *http.Request, _ storage.Provider) string {
-	return s.publicBaseURL(r) + oauthCallbackPath
+	return s.browserBaseURL(r) + oauthCallbackPath
 }
 
 // clientIDMismatch catches the common mistake of pasting one provider's

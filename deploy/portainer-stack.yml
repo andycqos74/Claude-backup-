@@ -14,6 +14,12 @@
 #   CB_PUBLIC_URL   externally reachable origin, e.g. https://backup.example.com:8443
 #   CB_OWNER        GitHub owner the images were published under
 #
+# Optional — serve the web GUI through a Cloudflare Tunnel instead of the
+# self-signed https://host:8443. Uncomment the two marked blocks below and
+# set CB_GUI_URL and CB_TUNNEL_TOKEN as well. Agents keep using 8443
+# directly: they pin the server's certificate, which Cloudflare replaces
+# with its own. Full setup in docs/cloudflared.md.
+#
 # IMPORTANT — the volumes below are declared `external` on purpose. Compose
 # normally prefixes volume names with the stack name, so deploying this as a
 # differently named stack would silently create *empty* volumes and the
@@ -33,8 +39,26 @@ services:
     environment:
       CB_SERVER_NAME: ${CB_SERVER_NAME}
       CB_PUBLIC_URL: ${CB_PUBLIC_URL}
+      # --- Cloudflare Tunnel for the GUI (1 of 2) ---
+      # GUI-only plain-HTTP listener for cloudflared, on the stack's internal
+      # network. Do not add it to `ports:` — it has no TLS of its own.
+      # CB_GUI_LISTEN: ":8080"
+      # CB_GUI_URL: ${CB_GUI_URL}
     volumes:
       - backup-data:/data
+
+  # --- Cloudflare Tunnel for the GUI (2 of 2) ---
+  # In the Cloudflare dashboard, point the tunnel's public hostname at
+  # HTTP → backup-server:8080 (not 8443).
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: backup-cloudflared
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run
+  #   environment:
+  #     TUNNEL_TOKEN: ${CB_TUNNEL_TOKEN}
+  #   depends_on:
+  #     - backup-server
 
   backup-agent:
     image: ghcr.io/${CB_OWNER}/centralbackup-agent:${CB_TAG}
