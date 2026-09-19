@@ -351,11 +351,13 @@ loads and runs there, unlike the standard builds.
 
 - Use it **only** on genuinely pre-Windows-10 systems; on Windows 10+ prefer
   the standard builds, which get current Go runtime and security fixes.
-- It is produced by `scripts/build-legacy-agent.sh` (invoked by the release
-  build and the Docker image build). A server image built without it simply
-  reports "no prebuilt agent for that platform" when the button is used —
-  rebuild with the script available, or run it and drop the binary into the
-  server's `CB_AGENT_BIN_DIR`.
+- It is built out-of-band with the Go 1.20 toolchain by
+  `scripts/build-legacy-agent.sh` and committed under `deploy/prebuilt/`; the
+  server image simply copies it in, so building the image needs no special
+  toolchain. Regenerate and re-commit the binary when the agent code changes.
+  If a server is somehow running without it, the button reports "no prebuilt
+  agent for that platform" — drop `backup-agent-windows-386-legacy.exe` into
+  the server's `CB_AGENT_BIN_DIR` (`/app/agents` in the Docker image).
 - Everything else is identical: same self-enrolling installer, same service
   (`CentralBackupAgent`), same backup/restore/transfer behaviour.
 

@@ -15,7 +15,11 @@
 # in a throwaway copy of the module so the committed go.mod stays on 1.25 for
 # the server, which needs newer Go.
 #
-# Usage: scripts/build-legacy-agent.sh [OUTPUT_DIR]   (default: dist/agents)
+# The result is committed under deploy/prebuilt and copied into the server
+# image at build time (the image build does not run this script). Rerun this
+# after any change to the agent code, then commit the refreshed binary.
+#
+# Usage: scripts/build-legacy-agent.sh [OUTPUT_DIR]   (default: deploy/prebuilt)
 set -eu
 
 GO_TOOLCHAIN="${LEGACY_GO_TOOLCHAIN:-go1.20.14}"
@@ -29,7 +33,7 @@ version="${VERSION:-$(git -C "$repo_root" describe --tags --always 2>/dev/null |
 # Resolve the output dir to an absolute path *before* we cd into the temp
 # build tree below — otherwise a relative path (e.g. "dist/agents") would
 # land inside the throwaway copy and be deleted with it.
-out_dir="${1:-$repo_root/dist/agents}"
+out_dir="${1:-$repo_root/deploy/prebuilt}"
 mkdir -p "$out_dir"
 out_dir=$(CDPATH= cd "$out_dir" && pwd)
 

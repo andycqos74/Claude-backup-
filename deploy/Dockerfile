@@ -16,13 +16,12 @@ RUN set -e; \
     CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-386.exe ./cmd/agent
 
 # Legacy 32-bit agent for Windows 7 SP1 / Embedded POSReady 7 (NT 6.1), which
-# the standard Go 1.25 binaries cannot run on. It needs the Go 1.20 toolchain,
-# fetched on demand via GOPROXY. Best-effort: git is optional (VERSION is
-# passed in) and a failure here does not fail the image build — the installer
-# endpoint simply 404s that platform if the binary is absent.
-RUN apk add --no-cache git >/dev/null 2>&1 || true; \
-    VERSION="${VERSION}" sh scripts/build-legacy-agent.sh /out/agents \
-    || echo "WARNING: legacy Windows 7 agent not built into this image"
+# the standard Go 1.25 binaries cannot run on. It is built out-of-band with
+# the Go 1.20 toolchain (scripts/build-legacy-agent.sh) and committed under
+# deploy/prebuilt, so the image build just copies it in — no toolchain
+# download at image-build time, which is unreliable in many CI/build
+# environments. Regenerate and re-commit it when the agent code changes.
+COPY deploy/prebuilt/backup-agent-windows-386-legacy.exe /out/agents/backup-agent-windows-386-legacy.exe
 
 # ---- central server image ----
 FROM alpine:3.21 AS server
