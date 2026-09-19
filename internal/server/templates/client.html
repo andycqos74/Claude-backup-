@@ -225,8 +225,13 @@ function transferProgress(t) {
 let browsePath = '';
 let browseParent = '';
 let browseEntries = [];
+// Pulls started from the browser, keyed by the file's full path, so the row
+// you pulled from turns into a live status and then a Download link — right
+// where you clicked, not hidden behind the dialog.
+let pulls = {}; // path -> { id, status: 'pulling'|'ready'|'error' }
 
 async function openBrowser(path) {
+  pulls = {};
   el('browse-dlg').showModal();
   await browseTo(path);
 }
@@ -247,13 +252,26 @@ async function browseTo(path) {
   el('browse-path').textContent = browsePath || '(filesystem roots)';
   el('browse-up').disabled = !browseParent && browsePath === '';
   if (l.error) { el('browse-err').hidden = false; el('browse-err').textContent = l.error; }
+  renderBrowseRows();
+}
+function pullActionCell(e, i) {
+  if (e.is_dir) return '';
+  const p = pulls[e.path];
+  if (!p) return `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`;
+  if (p.status === 'ready')
+    return `<a class="btn sm primary" href="/api/admin/transfers/${p.id}/download">⬇ Download</a>`;
+  if (p.status === 'error')
+    return `<span class="cmd-err">pull failed</span> <button class="btn sm" onclick="pullIdx(${i})">Retry</button>`;
+  return `<span class="muted">pulling…</span>`;
+}
+function renderBrowseRows() {
   fillRows('browse-tbl', browseEntries.map((e, i) => [
     e.is_dir
       ? `<a href="#" onclick="browseIdx(${i});return false">📁 ${esc(e.name)}</a>`
       : `📄 ${esc(e.name)}`,
     e.is_dir ? '' : fmtBytes(e.size),
     e.mtime ? fmtTime(e.mtime) : '',
-    e.is_dir ? '' : `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`,
+    pullActionCell(e, i),
   ]), 'Empty folder.');
 }
 function browseIdx(i) { const e = browseEntries[i]; if (e) browseTo(e.path); }
@@ -265,10 +283,23 @@ async function pullIdx(i) {
   const e = browseEntries[i];
   if (!e) return;
   try {
-    await api('POST', `/api/admin/agents/${agentID}/pull`, {source_path: e.path});
-    toast('Pulling ' + e.name + ' from client');
-    load();
+    const res = await api('POST', `/api/admin/agents/${agentID}/pull`, {source_path: e.path});
+    pulls[e.path] = {id: res.transfer_id, status: 'pulling'};
+    renderBrowseRows();     // row immediately shows "pulling…"
+    pollPull(e.path);
+    load();                 // also refresh the persistent transfers table
   } catch (err) { toast(err.message); }
+}
+async function pollPull(path) {
+  const p = pulls[path];
+  if (!p) return;
+  let t;
+  try { t = await api('GET', `/api/admin/transfers/${p.id}`); }
+  catch { return; }
+  if (t.Status === 'success') p.status = 'ready';
+  else if (t.Status === 'error' || t.Status === 'cancelled') p.status = 'error';
+  else { setTimeout(() => pollPull(path), 1000); return; }
+  renderBrowseRows();       // swap "pulling…" for the Download link
 }
 async function pushHere() {
   const input = el('browse-push');
