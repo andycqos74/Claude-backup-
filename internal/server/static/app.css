@@ -87,6 +87,13 @@ textarea { font-family: ui-monospace, monospace; }
   white-space: nowrap; max-width: 100%; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.cmd-bar { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+.cmd-bar input { flex: 1; font-family: ui-monospace, monospace; }
+#cmd-shell { width: auto; }
+#cmd-output { margin-top: 0.5rem; }
+#cmd-output .cmd-err { color: var(--err); }
+#cmd-output .cmd-done { color: var(--ok); }
+
 .crumbs { font-size: 0.95rem; }
 .progress { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.5s; }

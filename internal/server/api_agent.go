@@ -91,6 +91,7 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		s.hub.unregister(conn)
 		s.store.FailRunningRuns(agentID, "agent disconnected")
 		s.store.FailRunningTransfers(agentID, "client disconnected")
+		s.store.FailRunningCommands(agentID, "client disconnected")
 		log.Printf("agent disconnected: %s", agentID)
 	}()
 
@@ -207,6 +208,36 @@ func (s *Server) handleAgentMessage(agentID string, env proto.Envelope) error {
 		}
 		s.browse.deliver(l)
 		return nil
+
+	case proto.MsgCommandOutput:
+		o, err := unmarshal[proto.CommandOutput](env.Data)
+		if err != nil {
+			return err
+		}
+		if !s.commandBelongsToAgent(o.CommandID, agentID) {
+			return nil
+		}
+		return s.store.AppendCommandOutput(o.CommandID, o.Stream, o.Line)
+
+	case proto.MsgCommandDone:
+		d, err := unmarshal[proto.CommandDone](env.Data)
+		if err != nil {
+			return err
+		}
+		if !s.commandBelongsToAgent(d.CommandID, agentID) {
+			return nil
+		}
+		s.store.TouchAgent(agentID, nil)
+		status := proto.RunSuccess
+		switch {
+		case d.Error == proto.CommandCancelled:
+			status = proto.RunCancelled
+		case d.Error != "":
+			status = proto.RunError
+		case d.ExitCode != 0:
+			status = proto.RunError
+		}
+		return s.store.FinishCommand(d.CommandID, status, d.ExitCode, d.Error)
 
 	default:
 		log.Printf("agent %s: unknown message type %q", agentID, env.Type)

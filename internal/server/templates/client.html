@@ -75,6 +75,26 @@
   </table>
 </dialog>
 
+<div class="page-head">
+  <h2>Run a command</h2>
+  <span class="spacer"></span>
+  <select id="cmd-shell"></select>
+</div>
+<p class="muted">Runs on the client in the background as the agent service
+  account (<b>LocalSystem</b> on Windows, <b>root</b> under systemd). Output is
+  shown here only. <span id="cmd-offline" class="muted" hidden>Client is
+  offline — commands can't be run right now.</span></p>
+<form id="cmd-form" class="cmd-bar">
+  <input type="text" id="cmd-input" placeholder="e.g. Get-Service, ipconfig /all, systemctl status" autocomplete="off">
+  <button class="btn primary" type="submit" id="cmd-run">Run</button>
+  <button class="btn danger" type="button" id="cmd-cancel" onclick="cancelCommand()" hidden>Cancel</button>
+</form>
+<pre id="cmd-output" class="code log" hidden></pre>
+<table class="tbl" id="cmds-tbl">
+  <thead><tr><th>Status</th><th>Shell</th><th>Command</th><th>Exit</th><th>When</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
 <h2>Snapshots</h2>
 <table class="tbl" id="snaps-tbl">
   <thead><tr><th>Created</th><th>Job</th><th>Mode</th><th>Files</th><th>Size</th><th></th></tr></thead>
@@ -100,6 +120,10 @@ async function load() {
   // Browsing needs a live connection; pushes can still be queued offline.
   el('browse-btn').disabled = !a.online;
   el('browse-btn').title = a.online ? '' : 'Client is offline';
+  setShellOptions(a.OS);
+  el('cmd-offline').hidden = a.online;
+  el('cmd-input').disabled = !a.online;
+  if (!cmdTimer) el('cmd-run').disabled = !a.online;
   el('agent-meta').textContent =
     `${a.Hostname} · ${a.OS}/${a.Arch} · agent ${a.Version || '?'} · last seen ${fmtTime(a.LastSeen)} · id ${a.ID}`;
 
@@ -145,6 +169,17 @@ async function load() {
       actions.join(' '),
     ];
   }), 'No transfers yet.');
+
+  const cmds = await api('GET', '/api/admin/commands?agent=' + agentID);
+  fillRows('cmds-tbl', cmds.map(c => [
+    statusBadge(c.Status),
+    esc(c.Shell),
+    `<code>${esc(c.Command.length > 80 ? c.Command.slice(0, 80) + '…' : c.Command)}</code>`,
+    c.Status === 'running' ? '' : (c.Status === 'cancelled' ? '—' : String(c.ExitCode)),
+    fmtTime(c.CreatedAt),
+    `<button class="btn sm" onclick="viewCommand('${c.ID}')">View</button>
+     <button class="btn sm" onclick="delCommand('${c.ID}')">Remove</button>`,
+  ]), 'No commands run yet.');
 
   const runs = await api('GET', '/api/admin/runs?agent=' + agentID);
   fillRows('runs-tbl', runs.map(r => [
@@ -285,6 +320,90 @@ async function cancelTransfer(id) {
 async function delTransfer(id) {
   if (!confirm('Remove this transfer record and its stored copy on the server?')) return;
   await api('DELETE', `/api/admin/transfers/${id}`);
+  load();
+}
+// ---- remote command console ----
+let activeCmd = null; // { id, seq }
+let cmdTimer = null;
+const CMD_PAGE = 2000; // must match the server's maxCommandOutputPoll
+
+function setShellOptions(os) {
+  const sel = el('cmd-shell');
+  if (sel.dataset.filled) return;
+  const opts = /windows/i.test(os || '')
+    ? [['powershell', 'PowerShell'], ['cmd', 'cmd']]
+    : [['sh', 'sh']];
+  sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+  sel.dataset.filled = '1';
+}
+el('cmd-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const command = el('cmd-input').value.trim();
+  if (!command) return;
+  try {
+    const res = await api('POST', `/api/admin/agents/${agentID}/commands`,
+      {shell: el('cmd-shell').value, command});
+    el('cmd-input').value = '';
+    startStream(res.command_id, true);
+    load();
+  } catch (err) { toast(err.message); }
+});
+function stopStream() {
+  if (cmdTimer) { clearInterval(cmdTimer); cmdTimer = null; }
+}
+function startStream(id, fresh) {
+  stopStream();
+  activeCmd = {id, seq: 0};
+  const out = el('cmd-output');
+  out.hidden = false;
+  if (fresh) out.textContent = '';
+  pollCommand();
+  cmdTimer = setInterval(pollCommand, 1000);
+}
+async function pollCommand() {
+  if (!activeCmd) return;
+  let data;
+  try {
+    data = await api('GET', `/api/admin/commands/${activeCmd.id}?since=${activeCmd.seq}`);
+  } catch (err) { stopStream(); return; }
+  const out = el('cmd-output');
+  const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
+  const lines = data.output || [];
+  for (const l of lines) {
+    const span = document.createElement('span');
+    if (l.stream === 'stderr') span.className = 'cmd-err';
+    span.textContent = l.line + '\n';
+    out.appendChild(span);
+    activeCmd.seq = l.seq;
+  }
+  if (atBottom) out.scrollTop = out.scrollHeight;
+
+  const c = data.command;
+  const running = c.Status === 'running';
+  el('cmd-cancel').hidden = !running;
+  el('cmd-run').disabled = running;
+  // When finished, keep draining if a full page came back (more may remain).
+  if (!running && lines.length < CMD_PAGE) {
+    stopStream();
+    const foot = document.createElement('span');
+    foot.className = c.Status === 'success' ? 'cmd-done' : 'cmd-err';
+    foot.textContent = `\n[${c.Status}${c.Status === 'cancelled' ? '' : ', exit ' + c.ExitCode}]\n`;
+    out.appendChild(foot);
+    out.scrollTop = out.scrollHeight;
+    el('cmd-run').disabled = false;
+    load();
+  }
+}
+function viewCommand(id) { startStream(id, true); }
+async function cancelCommand() {
+  if (!activeCmd) return;
+  try { await api('POST', `/api/admin/commands/${activeCmd.id}/cancel`); }
+  catch (err) { toast(err.message); }
+}
+async function delCommand(id) {
+  if (!confirm('Remove this command and its output?')) return;
+  await api('DELETE', `/api/admin/commands/${id}`);
+  if (activeCmd && activeCmd.id === id) { stopStream(); el('cmd-output').hidden = true; }
   load();
 }
 async function delSnap(id) {
