@@ -22,8 +22,12 @@ import (
 // binary shipped in the server image, and the filename offered to the admin.
 var installerTargets = map[string]struct{ file, download string }{
 	"windows-amd64": {"backup-agent-windows-amd64.exe", "backup-agent-installer.exe"},
-	"linux-amd64":   {"backup-agent-linux-amd64", "backup-agent-installer"},
-	"linux-arm64":   {"backup-agent-linux-arm64", "backup-agent-installer"},
+	// 32-bit Windows keeps its own filename so an admin who downloads both
+	// cannot install the x86 build on an x64 machine by mistake, where WOW64
+	// would silently redirect System32 reads to SysWOW64.
+	"windows-386": {"backup-agent-windows-386.exe", "backup-agent-installer-x86.exe"},
+	"linux-amd64": {"backup-agent-linux-amd64", "backup-agent-installer"},
+	"linux-arm64": {"backup-agent-linux-arm64", "backup-agent-installer"},
 }
 
 func (s *Server) handleInstaller(w http.ResponseWriter, r *http.Request) {

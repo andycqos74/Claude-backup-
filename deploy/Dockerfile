@@ -12,7 +12,8 @@ RUN set -e; \
     CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o /out/backup-server ./cmd/server; \
     CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-linux-amd64 ./cmd/agent; \
     CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-linux-arm64 ./cmd/agent; \
-    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-amd64.exe ./cmd/agent
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-amd64.exe ./cmd/agent; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-386.exe ./cmd/agent
 
 # ---- central server image ----
 FROM alpine:3.21 AS server

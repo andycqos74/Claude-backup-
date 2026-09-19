@@ -130,6 +130,25 @@ CREATE TABLE IF NOT EXISTS blobs (
 	size_stored INTEGER NOT NULL,
 	created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS transfers (
+	id TEXT PRIMARY KEY,
+	agent_id TEXT NOT NULL,
+	filename TEXT NOT NULL,
+	dest_path TEXT NOT NULL,
+	size INTEGER NOT NULL DEFAULT 0,
+	hash TEXT NOT NULL DEFAULT '',
+	object_key TEXT NOT NULL DEFAULT '',
+	mode INTEGER NOT NULL DEFAULT 0,
+	overwrite INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	written_path TEXT NOT NULL DEFAULT '',
+	bytes_done INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	started_at INTEGER NOT NULL DEFAULT 0,
+	finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_transfers_agent ON transfers(agent_id, created_at);
 `)
 	if err != nil {
 		return err
@@ -419,6 +438,7 @@ func (s *Store) DeleteAgent(id string) error {
 		`DELETE FROM run_logs WHERE run_id IN (SELECT id FROM runs WHERE agent_id = ?)`,
 		`DELETE FROM runs WHERE agent_id = ?`,
 		`DELETE FROM jobs WHERE agent_id = ?`,
+		`DELETE FROM transfers WHERE agent_id = ?`,
 		`DELETE FROM agents WHERE id = ?`,
 	} {
 		if _, err := s.db.Exec(q, id); err != nil {

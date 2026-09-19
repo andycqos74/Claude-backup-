@@ -306,6 +306,7 @@ certificate fingerprint, so nothing has to be copied onto the client:
 
 ```
 Windows (elevated PowerShell):  .\backup-agent-installer.exe install
+Windows 32-bit:                 .\backup-agent-installer-x86.exe install
 Linux:                          chmod +x backup-agent-installer
                                 sudo ./backup-agent-installer install
 ```
@@ -319,6 +320,22 @@ Because there is no bootstrap script, this avoids the whole class of
 failures that come from the *installer* rather than the agent: PowerShell
 version differences, .NET TLS negotiation, execution policy, and truncated
 or mis-quoted tokens.
+
+#### 32-bit Windows
+
+The **Windows (32-bit)** button serves an x86 build under its own filename,
+`backup-agent-installer-x86.exe`, so it can't be confused with the x64 one.
+Use it **only on a genuinely 32-bit Windows install**:
+
+- On 64-bit Windows a 32-bit agent runs under WOW64, where reads of
+  `C:\Windows\System32` are silently redirected to `SysWOW64`. The backup
+  would appear to succeed while capturing the wrong system directory. Take
+  the x64 build on those machines.
+- Bitness doesn't change the OS floor: the agent is built with Go 1.25 and
+  needs **Windows 10 / Server 2016 or newer** either way. It will not run on
+  XP, Vista, 7 or Server 2008.
+- The paste-a-command route (`install-agent.ps1`) always fetches the x64
+  binary. On a 32-bit client, use the installer download instead.
 
 ### Alternative: a ready-to-paste command
 

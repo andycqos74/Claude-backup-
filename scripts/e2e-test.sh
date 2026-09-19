@@ -170,6 +170,40 @@ cmp "$FIX/sub/big.bin" "$RESTORED_ROOT/sub/big.bin" || fail "big.bin corrupt aft
 [ "$(readlink "$RESTORED_ROOT/link")" = "a.txt" ] || fail "symlink not restored"
 pass "restore matches source (incl. 300KB binary + symlink)"
 
+say "Push a file to the client (background transfer)"
+PUSH_SRC="$WORK/push-src.txt"
+head -c 200000 /dev/urandom | base64 > "$PUSH_SRC"
+PUSH_DEST="$WORK/pushed/hello.txt"
+TR=$(curl -ksS -b "$JAR" -H 'X-Requested-With: fetch' \
+    -F "file=@$PUSH_SRC;filename=hello.txt" -F "dest_path=$PUSH_DEST" -F overwrite=1 \
+    "$BASE/api/admin/agents/$AGENT_ID/transfers")
+TR_ID=$(echo "$TR" | jq -r .transfer_id)
+[ -n "$TR_ID" ] && [ "$TR_ID" != null ] || fail "transfer create: $TR"
+transfer_status() { capi GET "/api/admin/transfers/$1" | jq -r .Status; }
+transfer_finished() { [[ "$(transfer_status "$1")" =~ ^(success|error|cancelled)$ ]]; }
+wait_for 30 "file push to finish" transfer_finished "$TR_ID"
+[ "$(transfer_status "$TR_ID")" = success ] || { cat "$WORK/agent.log"; fail "push status: $(capi GET /api/admin/transfers/$TR_ID)"; }
+cmp "$PUSH_SRC" "$PUSH_DEST" || fail "pushed file content differs"
+pass "file pushed to client in background and matches source"
+
+say "Push into a directory + overwrite guard"
+mkdir -p "$WORK/dropdir"
+TR2=$(curl -ksS -b "$JAR" -H 'X-Requested-With: fetch' \
+    -F "file=@$PUSH_SRC;filename=dropped.txt" -F "dest_path=$WORK/dropdir/" \
+    "$BASE/api/admin/agents/$AGENT_ID/transfers")
+TR2_ID=$(echo "$TR2" | jq -r .transfer_id)
+wait_for 30 "dir push to finish" transfer_finished "$TR2_ID"
+[ "$(transfer_status "$TR2_ID")" = success ] || fail "dir push failed"
+[ -f "$WORK/dropdir/dropped.txt" ] || fail "file not dropped into directory under its own name"
+# A second push to the same path without overwrite must fail rather than clobber.
+TR3=$(curl -ksS -b "$JAR" -H 'X-Requested-With: fetch' \
+    -F "file=@$PUSH_SRC;filename=dropped.txt" -F "dest_path=$WORK/dropdir/dropped.txt" \
+    "$BASE/api/admin/agents/$AGENT_ID/transfers")
+TR3_ID=$(echo "$TR3" | jq -r .transfer_id)
+wait_for 30 "overwrite-guard push to finish" transfer_finished "$TR3_ID"
+[ "$(transfer_status "$TR3_ID")" = error ] || fail "expected error when overwriting without permission"
+pass "directory drop works; overwrite guard blocks clobbering"
+
 say "Cancel a running backup"
 CANCEL_FIX="$WORK/cancel-fixture"
 mkdir -p "$CANCEL_FIX"

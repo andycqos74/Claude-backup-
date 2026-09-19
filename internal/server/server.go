@@ -144,6 +144,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("GET /api/agent/blobs/{hash}", s.agentAuth(s.handleBlobGet))
 	mux.HandleFunc("POST /api/agent/snapshots", s.agentAuth(s.handleSnapshotCommit))
 	mux.HandleFunc("GET /api/agent/manifests/{id}", s.agentAuth(s.handleManifestGet))
+	mux.HandleFunc("GET /api/agent/transfers/{id}/content", s.agentAuth(s.handleTransferContent))
 
 	// Admin API (session cookie).
 	s.registerAdminAPI(mux)

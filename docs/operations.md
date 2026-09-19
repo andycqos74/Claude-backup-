@@ -58,6 +58,35 @@ The agent state directory contains `creds.json` (agent identity — protect
 it) and cached manifests (`manifest-<job>.jsonl.zst`) used to speed up
 incrementals; deleting caches is safe, the agent refetches from the server.
 
+## Sending a file to a client
+
+A client's page has a **Send file to client** button (Clients → pick a
+client). Choose a file and a destination path on that client, then send it.
+The file is delivered over the same authenticated, fingerprint-pinned
+channel the agent already uses, and written to disk by the agent's
+background service — nothing is shown on the client's screen. Progress and
+the final result are visible only here, in the server GUI.
+
+- **Destination path.** End it with `/` or `\` (or point it at an existing
+  folder) to drop the file into that folder under its own name; otherwise
+  the path is the full target filename, e.g.
+  `C:\ProgramData\app\config.yaml` or `/etc/app/config.yaml`.
+- **Overwrite.** Off by default: if the target already exists the transfer
+  fails rather than clobbering it. Tick *Overwrite* to replace it.
+- **Offline clients.** The push is queued and delivered automatically when
+  the client next reconnects.
+- **Integrity.** The content is hashed on upload and re-verified on the
+  client before the file is moved into place (an atomic rename), so a
+  partial or corrupted transfer never leaves a half-written file.
+- **Permissions.** The agent runs as LocalSystem (Windows) or root
+  (systemd), so it writes with those privileges. On Windows the service can
+  reach paths a normal user cannot; there is no interactive prompt.
+- **Housekeeping.** The uploaded copy is kept on the server (in the active
+  storage backend) until you *Remove* the transfer, so its status stays
+  auditable and it can be re-sent. Removing a client also removes its
+  parked payloads. Pushes are meant for configs, scripts and small
+  installers (capped at 2 GiB); use a backup job for bulk data.
+
 ## Docker-host jobs
 
 With the containerized agent, host paths appear under `/host` (read-only).

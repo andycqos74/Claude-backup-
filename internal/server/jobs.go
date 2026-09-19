@@ -214,6 +214,8 @@ func (s *Server) cancelRun(runID string) error {
 // dispatchPendingWork runs when an agent (re)connects: sends queued runs
 // and fires catch-up backups for schedules missed while offline.
 func (s *Server) dispatchPendingWork(agentID string) {
+	s.dispatchPendingTransfers(agentID)
+
 	queued, err := s.store.QueuedRuns(agentID)
 	if err == nil {
 		for _, run := range queued {

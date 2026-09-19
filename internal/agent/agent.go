@@ -33,6 +33,11 @@ type Agent struct {
 	currentRunID string
 	cancelRun    context.CancelFunc
 
+	// File pushes run independently of backup/restore (they neither wait on
+	// a.runs nor block it), so each has its own cancel registered here.
+	xferMu sync.Mutex
+	xfers  map[string]context.CancelFunc
+
 	cfg *localConfig // agent.yaml state (see config.go)
 }
 
@@ -70,6 +75,7 @@ func New(stateDir, configPath string) (*Agent, error) {
 		configPath: configPath,
 		creds:      creds,
 		client:     newServerClient(creds),
+		xfers:      map[string]context.CancelFunc{},
 	}
 	a.cfg = newLocalConfig(a)
 	return a, nil
@@ -214,6 +220,28 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 		a.runMu.Unlock()
 		if match {
 			log.Printf("[run %s] cancellation requested", cancel.RunID)
+			cancelFn()
+		}
+
+	case proto.MsgPushFile:
+		cmd, err := unmarshalMsg[proto.PushFile](env.Data)
+		if err != nil {
+			log.Printf("bad push_file message: %v", err)
+			return
+		}
+		go a.runPushFile(cmd)
+
+	case proto.MsgCancelTransfer:
+		cancel, err := unmarshalMsg[proto.CancelTransfer](env.Data)
+		if err != nil {
+			log.Printf("bad cancel_transfer message: %v", err)
+			return
+		}
+		a.xferMu.Lock()
+		cancelFn := a.xfers[cancel.TransferID]
+		a.xferMu.Unlock()
+		if cancelFn != nil {
+			log.Printf("[transfer %s] cancellation requested", cancel.TransferID)
 			cancelFn()
 		}
 

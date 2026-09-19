@@ -34,3 +34,9 @@ func BlobKey(hash string) string {
 func ManifestKey(snapshotID string) string {
 	return "manifests/" + snapshotID + ".jsonl.zst"
 }
+
+// TransferKey maps a file-push transfer ID to the storage key holding its
+// (zstd-compressed) payload, kept until the transfer record is deleted.
+func TransferKey(transferID string) string {
+	return "transfers/" + transferID + ".zst"
+}

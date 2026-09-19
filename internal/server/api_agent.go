@@ -90,6 +90,7 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		s.hub.unregister(conn)
 		s.store.FailRunningRuns(agentID, "agent disconnected")
+		s.store.FailRunningTransfers(agentID, "client disconnected")
 		log.Printf("agent disconnected: %s", agentID)
 	}()
 
@@ -169,6 +170,27 @@ func (s *Server) handleAgentMessage(agentID string, env proto.Envelope) error {
 		}
 		s.store.TouchAgent(agentID, nil)
 		return s.store.FinishRun(d.RunID, d.Status, d.SnapshotID, d.Error, d.Stats)
+
+	case proto.MsgTransferProgress:
+		p, err := unmarshal[proto.TransferProgress](env.Data)
+		if err != nil {
+			return err
+		}
+		if !s.transferBelongsToAgent(p.TransferID, agentID) {
+			return nil
+		}
+		return s.store.UpdateTransferProgress(p.TransferID, p.BytesDone)
+
+	case proto.MsgTransferDone:
+		d, err := unmarshal[proto.TransferDone](env.Data)
+		if err != nil {
+			return err
+		}
+		if !s.transferBelongsToAgent(d.TransferID, agentID) {
+			return nil
+		}
+		s.store.TouchAgent(agentID, nil)
+		return s.store.FinishTransfer(d.TransferID, d.Status, d.Path, d.Error)
 
 	case proto.MsgDockerInventory:
 		inv, err := unmarshal[proto.DockerInventory](env.Data)
