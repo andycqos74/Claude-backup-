@@ -107,6 +107,95 @@ func (a *Agent) doPushFile(ctx context.Context, cmd proto.PushFile) (string, err
 	return target, nil
 }
 
+// runPullFile reads a file off the client's disk and uploads it to the
+// server. Runs in the background service; the operator observes it only from
+// the server side.
+func (a *Agent) runPullFile(cmd proto.PullFile) {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.xferMu.Lock()
+	a.xfers[cmd.TransferID] = cancel
+	a.xferMu.Unlock()
+	defer func() {
+		cancel()
+		a.xferMu.Lock()
+		delete(a.xfers, cmd.TransferID)
+		a.xferMu.Unlock()
+	}()
+
+	err := a.doPullFile(ctx, cmd)
+	done := proto.TransferDone{TransferID: cmd.TransferID}
+	switch {
+	case errors.Is(err, context.Canceled):
+		done.Status = proto.RunCancelled
+		log.Printf("[transfer %s] pull cancelled", cmd.TransferID)
+	case err != nil:
+		done.Status = proto.RunError
+		done.Error = err.Error()
+		log.Printf("[transfer %s] pull failed: %v", cmd.TransferID, err)
+	default:
+		done.Status = proto.RunSuccess
+		log.Printf("[transfer %s] pulled %s", cmd.TransferID, cmd.SourcePath)
+	}
+	if err := a.send(proto.MsgTransferDone, done); err != nil {
+		log.Printf("[transfer %s] could not report completion: %v", cmd.TransferID, err)
+	}
+}
+
+func (a *Agent) doPullFile(ctx context.Context, cmd proto.PullFile) error {
+	src := filepath.FromSlash(cmd.SourcePath)
+	fi, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("%s is a directory, not a file", src)
+	}
+
+	f, err := openForBackup(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	pr, pw := io.Pipe()
+	prog := &pushProgress{a: a, id: cmd.TransferID, total: fi.Size()}
+	copyDone := make(chan struct{})
+	go func() {
+		defer close(copyDone)
+		enc, cerr := zstd.NewWriter(pw)
+		if cerr != nil {
+			pw.CloseWithError(cerr)
+			return
+		}
+		_, cerr = io.Copy(enc, io.TeeReader(f, prog))
+		if cerr == nil {
+			cerr = enc.Close()
+		}
+		pw.CloseWithError(cerr)
+	}()
+
+	// Tie the pipe to ctx so a cancellation unblocks a parked Read/Write
+	// immediately (see the matching note in engine.uploadFile).
+	watchDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			pr.CloseWithError(ctx.Err())
+		case <-watchDone:
+		}
+	}()
+
+	uploadErr := a.client.putTransferContent(ctx, cmd.TransferID, pr)
+	pr.CloseWithError(fmt.Errorf("upload finished"))
+	close(watchDone)
+	<-copyDone
+	if uploadErr != nil {
+		return uploadErr
+	}
+	prog.flush()
+	return nil
+}
+
 // transferTarget resolves where to write on the client. A destination that
 // ends in a path separator, or that names an existing directory, is treated
 // as a directory the file is dropped into; otherwise it is the full target

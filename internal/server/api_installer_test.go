@@ -83,12 +83,27 @@ func TestInstallerServesEachPlatform(t *testing.T) {
 // on a 64-bit host would put the agent under WOW64, where System32 reads
 // are silently redirected to SysWOW64.
 func TestInstallerWindowsBuildsAreDistinct(t *testing.T) {
-	x64, x86 := installerTargets["windows-amd64"], installerTargets["windows-386"]
+	x64 := installerTargets["windows-amd64"]
+	x86 := installerTargets["windows-386"]
+	win7 := installerTargets["windows-386-legacy"]
 	if x86.file == "" {
 		t.Fatal("no windows-386 target registered")
 	}
-	if x64.file == x86.file || x64.download == x86.download {
-		t.Errorf("windows-amd64 %+v and windows-386 %+v must differ", x64, x86)
+	if win7.file == "" {
+		t.Fatal("no windows-386-legacy target registered")
+	}
+	// All three Windows builds must serve distinct binaries under distinct
+	// download names, so none can be installed on the wrong OS/arch by
+	// picking the wrong button.
+	wins := []struct{ file, download string }{
+		{x64.file, x64.download}, {x86.file, x86.download}, {win7.file, win7.download},
+	}
+	for i := range wins {
+		for j := i + 1; j < len(wins); j++ {
+			if wins[i].file == wins[j].file || wins[i].download == wins[j].download {
+				t.Errorf("windows targets %+v and %+v must differ", wins[i], wins[j])
+			}
+		}
 	}
 }
 

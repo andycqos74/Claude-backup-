@@ -200,6 +200,14 @@ func (s *Server) handleAgentMessage(agentID string, env proto.Envelope) error {
 		s.docker.deliver(inv)
 		return nil
 
+	case proto.MsgDirListing:
+		l, err := unmarshal[proto.DirListing](env.Data)
+		if err != nil {
+			return err
+		}
+		s.browse.deliver(l)
+		return nil
+
 	default:
 		log.Printf("agent %s: unknown message type %q", agentID, env.Type)
 		return nil

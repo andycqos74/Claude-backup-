@@ -17,17 +17,24 @@
   <div class="row">
     <a class="btn primary" id="dl-win" href="#">Windows (x64)</a>
     <a class="btn" id="dl-win32" href="#">Windows (32-bit)</a>
+    <a class="btn" id="dl-win7" href="#">Windows 7 / POSReady (32-bit)</a>
     <a class="btn" id="dl-linux" href="#">Linux (x64)</a>
     <a class="btn" id="dl-linux-arm" href="#">Linux (arm64)</a>
   </div>
-  <pre class="code">Windows:  .\backup-agent-installer.exe install
-32-bit:   .\backup-agent-installer-x86.exe install
-Linux:    chmod +x backup-agent-installer &amp;&amp; sudo ./backup-agent-installer install</pre>
+  <pre class="code">Windows:      .\backup-agent-installer.exe install
+32-bit:       .\backup-agent-installer-x86.exe install
+Windows 7:    .\backup-agent-installer-x86-win7.exe install
+Linux:        chmod +x backup-agent-installer &amp;&amp; sudo ./backup-agent-installer install</pre>
   <p class="muted">Use <b>Windows (32-bit)</b> only on a genuinely 32-bit
     Windows install. On 64-bit Windows it would run under WOW64, which
     redirects <code>C:\Windows\System32</code> to <code>SysWOW64</code> and
     would back up the wrong system directory — take the x64 build there.
-    Either way Windows 10 / Server 2016 or newer is required.</p>
+    <b>Windows 10 / Server 2016 or newer</b> is required for the standard
+    builds.</p>
+  <p class="muted"><b>Windows 7 / POSReady (32-bit)</b> is a separate legacy
+    build for <b>Windows 7 SP1</b> and <b>Windows Embedded POSReady 7</b>
+    (NT 6.1), on which the standard builds crash at startup. Use it only on
+    those older systems.</p>
   <p class="muted">Each download carries its own single-use token, valid 24
     hours. Downloading again issues a new one.</p>
 
@@ -102,6 +109,7 @@ docker run -d --name backup-agent --restart unless-stopped \\
   // the one shown above — the admin can use either route.
   el('dl-win').href = '/api/admin/installer?platform=windows-amd64';
   el('dl-win32').href = '/api/admin/installer?platform=windows-386';
+  el('dl-win7').href = '/api/admin/installer?platform=windows-386-legacy';
   el('dl-linux').href = '/api/admin/installer?platform=linux-amd64';
   el('dl-linux-arm').href = '/api/admin/installer?platform=linux-arm64';
   el('token-fp').textContent = t.fingerprint;

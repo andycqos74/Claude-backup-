@@ -146,6 +146,106 @@ func TestTransferUploadQueuesWhenOffline(t *testing.T) {
 	}
 }
 
+// TestPullRoundTrip drives the full client->server pull path from the
+// server's side: create the pull, receive the agent's upload, and serve the
+// admin download — all reconstructing the original bytes.
+func TestPullRoundTrip(t *testing.T) {
+	s := testServer(t)
+	agentID, _, _ := s.store.CreateAgent("box", proto.EnrollRequest{Hostname: "box"})
+
+	// Admin requests a file off the client (offline here, so it queues).
+	r := httptest.NewRequest("POST", "/api/admin/agents/"+agentID+"/pull",
+		bytes.NewReader([]byte(`{"source_path":"/var/log/app/current.log"}`)))
+	r.SetPathValue("id", agentID)
+	w := httptest.NewRecorder()
+	s.handleTransferPull(w, r)
+	if w.Code != 200 {
+		t.Fatalf("pull create status %d: %s", w.Code, w.Body.String())
+	}
+	transfers, _ := s.store.ListTransfers(agentID, 10)
+	if len(transfers) != 1 {
+		t.Fatalf("expected 1 transfer, got %d", len(transfers))
+	}
+	tr := transfers[0]
+	if tr.Direction != proto.DirectionPull || tr.Status != proto.RunQueued {
+		t.Errorf("pull transfer wrong: %+v", tr)
+	}
+	if tr.Filename != "current.log" || tr.SourcePath != "/var/log/app/current.log" {
+		t.Errorf("pull fields wrong: %+v", tr)
+	}
+
+	// The agent uploads the file's (compressed) content.
+	content := bytes.Repeat([]byte("log line\n"), 500)
+	var comp bytes.Buffer
+	enc, _ := zstd.NewWriter(&comp)
+	enc.Write(content)
+	enc.Close()
+	up := httptest.NewRequest("PUT", "/api/agent/transfers/"+tr.ID+"/content", bytes.NewReader(comp.Bytes()))
+	up.SetPathValue("id", tr.ID)
+	uw := httptest.NewRecorder()
+	s.handleTransferUpload(uw, up, agentID)
+	if uw.Code != 200 {
+		t.Fatalf("upload status %d: %s", uw.Code, uw.Body.String())
+	}
+
+	// The server recorded the raw size and hash of the uploaded file.
+	got, _ := s.store.GetTransfer(tr.ID)
+	want := sha256.Sum256(content)
+	if got.Hash != hex.EncodeToString(want[:]) || got.Size != int64(len(content)) {
+		t.Errorf("payload not recorded: %+v", got)
+	}
+	// Mark success (the agent's transfer_done would do this over the socket).
+	s.store.FinishTransfer(tr.ID, proto.RunSuccess, "", "")
+
+	// Admin downloads it — decompressed, original bytes, right filename.
+	dr := httptest.NewRequest("GET", "/api/admin/transfers/"+tr.ID+"/download", nil)
+	dr.SetPathValue("id", tr.ID)
+	dw := httptest.NewRecorder()
+	s.handleTransferDownload(dw, dr)
+	if dw.Code != 200 {
+		t.Fatalf("download status %d", dw.Code)
+	}
+	if !bytes.Equal(dw.Body.Bytes(), content) {
+		t.Errorf("downloaded content does not match original")
+	}
+	if cd := dw.Header().Get("Content-Disposition"); cd != `attachment; filename="current.log"` {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+}
+
+func TestUploadRejectsPushTransfer(t *testing.T) {
+	s := testServer(t)
+	agentID, _, _ := s.store.CreateAgent("box", proto.EnrollRequest{Hostname: "box"})
+	// A push transfer must not accept an agent upload.
+	s.store.CreateTransfer(store.Transfer{
+		ID: "p1", AgentID: agentID, Direction: proto.DirectionPush,
+		Filename: "f", DestPath: "/x", ObjectKey: "k", Status: proto.RunRunning,
+	})
+	up := httptest.NewRequest("PUT", "/api/agent/transfers/p1/content", bytes.NewReader([]byte("x")))
+	up.SetPathValue("id", "p1")
+	uw := httptest.NewRecorder()
+	s.handleTransferUpload(uw, up, agentID)
+	if uw.Code != 400 {
+		t.Errorf("push upload status %d, want 400", uw.Code)
+	}
+}
+
+func TestDownloadOnlySucceededPulls(t *testing.T) {
+	s := testServer(t)
+	agentID, _, _ := s.store.CreateAgent("box", proto.EnrollRequest{Hostname: "box"})
+	s.store.CreateTransfer(store.Transfer{
+		ID: "d1", AgentID: agentID, Direction: proto.DirectionPull,
+		Filename: "f", SourcePath: "/x", ObjectKey: "k", Status: proto.RunRunning,
+	})
+	dr := httptest.NewRequest("GET", "/api/admin/transfers/d1/download", nil)
+	dr.SetPathValue("id", "d1")
+	dw := httptest.NewRecorder()
+	s.handleTransferDownload(dw, dr)
+	if dw.Code != 409 {
+		t.Errorf("download of in-flight pull status %d, want 409", dw.Code)
+	}
+}
+
 func TestTransferUploadRejectsMissingFields(t *testing.T) {
 	s := testServer(t)
 	agentID, _, _ := s.store.CreateAgent("box", proto.EnrollRequest{Hostname: "box"})

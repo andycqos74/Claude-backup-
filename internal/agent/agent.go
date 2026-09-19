@@ -231,6 +231,22 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 		}
 		go a.runPushFile(cmd)
 
+	case proto.MsgPullFile:
+		cmd, err := unmarshalMsg[proto.PullFile](env.Data)
+		if err != nil {
+			log.Printf("bad pull_file message: %v", err)
+			return
+		}
+		go a.runPullFile(cmd)
+
+	case proto.MsgBrowseDir:
+		cmd, err := unmarshalMsg[proto.BrowseDir](env.Data)
+		if err != nil {
+			log.Printf("bad browse_dir message: %v", err)
+			return
+		}
+		go a.handleBrowseDir(cmd)
+
 	case proto.MsgCancelTransfer:
 		cancel, err := unmarshalMsg[proto.CancelTransfer](env.Data)
 		if err != nil {

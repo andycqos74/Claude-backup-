@@ -80,6 +80,12 @@ textarea { font-family: ui-monospace, monospace; }
 .dlg { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text);
   max-width: 720px; width: 90vw; padding: 1.25rem; }
 .dlg::backdrop { background: rgba(0,0,0,0.5); }
+.dlg.wide { max-width: 900px; }
+.dlg.wide #browse-tbl { display: block; max-height: 55vh; overflow-y: auto; }
+.crumb { background: var(--code-bg); color: var(--code-text); padding: 0.2rem 0.55rem;
+  border-radius: 6px; font: 0.82rem/1.5 ui-monospace, monospace; overflow-x: auto;
+  white-space: nowrap; max-width: 100%; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .crumbs { font-size: 0.95rem; }
 .progress { height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; }
