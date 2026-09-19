@@ -46,6 +46,10 @@ compressed and deduplicated, stored on the server's local storage.
   its progress and result are visible only to the operator on the server.
   Queued for offline clients, hash-verified end to end. See
   [docs/operations.md](docs/operations.md).
+- **Remote command console**: run a shell command on a client from the GUI
+  (**PowerShell** or **cmd** on Windows, **sh** on Linux/macOS) and watch
+  stdout/stderr stream back live. Runs in the background as the service
+  account; cancel kills the whole process tree.
 - **Docker-aware**: containerized agent for Docker hosts with pre/post
   hooks (e.g. `pg_dump` before backup) and host-volume access. The job
   editor lists the client's **containers as tick-boxes**, grouped by

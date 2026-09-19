@@ -39,6 +39,10 @@ const (
 	// agent -> server (file browser)
 	MsgDirListing = "dir_listing"
 
+	// agent -> server (remote command console)
+	MsgCommandOutput = "command_output"
+	MsgCommandDone   = "command_done"
+
 	// server -> agent
 	MsgJobsUpdate     = "jobs_update"
 	MsgRunBackup      = "run_backup"
@@ -53,12 +57,24 @@ const (
 
 	// server -> agent (file browser)
 	MsgBrowseDir = "browse_dir"
+
+	// server -> agent (remote command console)
+	MsgRunCommand    = "run_command"
+	MsgCancelCommand = "cancel_command"
 )
 
 // Transfer directions.
 const (
 	DirectionPush = "push" // server -> client
 	DirectionPull = "pull" // client -> server
+)
+
+// Command shells. powershell and cmd are Windows-only; sh is used on
+// Linux/macOS.
+const (
+	ShellPowerShell = "powershell"
+	ShellCmd        = "cmd"
+	ShellSh         = "sh"
 )
 
 // Run modes.
@@ -314,6 +330,42 @@ type TransferDone struct {
 // CancelTransfer asks the agent to abort an in-progress file push.
 type CancelTransfer struct {
 	TransferID string `json:"transfer_id"`
+}
+
+// RunCommand asks the agent to run a shell command on the client and stream
+// its output back. It runs in the agent's background service (as that
+// service's account — LocalSystem or root), so nothing appears on the
+// client's screen; the operator sees the output only in the server GUI.
+type RunCommand struct {
+	CommandID string `json:"command_id"`
+	Shell     string `json:"shell"` // powershell | cmd | sh
+	Command   string `json:"command"`
+}
+
+// CancelCommand asks the agent to terminate a running command.
+type CancelCommand struct {
+	CommandID string `json:"command_id"`
+}
+
+// CommandCancelled is the exact CommandDone.Error the agent sends when a
+// command was terminated by a cancel request, so the server can distinguish
+// it from a genuine failure.
+const CommandCancelled = "cancelled"
+
+// CommandOutput is one line of a running command's output.
+type CommandOutput struct {
+	CommandID string `json:"command_id"`
+	Stream    string `json:"stream"` // stdout | stderr
+	Line      string `json:"line"`
+}
+
+// CommandDone finalises a command run. ExitCode is the process exit status
+// (0 = success); Error is set only when the command could not be launched or
+// was cancelled.
+type CommandDone struct {
+	CommandID string `json:"command_id"`
+	ExitCode  int    `json:"exit_code"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ManifestEntry is one line of a snapshot manifest (JSONL, zstd-compressed

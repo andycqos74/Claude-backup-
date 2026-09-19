@@ -151,6 +151,27 @@ CREATE TABLE IF NOT EXISTS transfers (
 	finished_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_transfers_agent ON transfers(agent_id, created_at);
+CREATE TABLE IF NOT EXISTS commands (
+	id TEXT PRIMARY KEY,
+	agent_id TEXT NOT NULL,
+	shell TEXT NOT NULL,
+	command TEXT NOT NULL,
+	status TEXT NOT NULL,
+	exit_code INTEGER NOT NULL DEFAULT 0,
+	error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	started_at INTEGER NOT NULL DEFAULT 0,
+	finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_commands_agent ON commands(agent_id, created_at);
+CREATE TABLE IF NOT EXISTS command_output (
+	seq INTEGER PRIMARY KEY AUTOINCREMENT,
+	command_id TEXT NOT NULL,
+	ts INTEGER NOT NULL,
+	stream TEXT NOT NULL,
+	line TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_command_output ON command_output(command_id, seq);
 `)
 	if err != nil {
 		return err
@@ -461,6 +482,8 @@ func (s *Store) DeleteAgent(id string) error {
 		`DELETE FROM runs WHERE agent_id = ?`,
 		`DELETE FROM jobs WHERE agent_id = ?`,
 		`DELETE FROM transfers WHERE agent_id = ?`,
+		`DELETE FROM command_output WHERE command_id IN (SELECT id FROM commands WHERE agent_id = ?)`,
+		`DELETE FROM commands WHERE agent_id = ?`,
 		`DELETE FROM agents WHERE id = ?`,
 	} {
 		if _, err := s.db.Exec(q, id); err != nil {

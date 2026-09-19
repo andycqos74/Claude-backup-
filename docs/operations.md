@@ -112,6 +112,33 @@ background service.
   parked payloads. Transfers are meant for configs, scripts, logs and small
   installers (capped at 2 GiB each); use a backup job for bulk data.
 
+## Running a command on a client
+
+A client's page has a **Run a command** console. Pick a shell, type a
+command, and its output streams back live — the command runs in the agent's
+background service, so nothing appears on the client's screen.
+
+- **Shells.** Windows clients offer **PowerShell** (`powershell -NoProfile
+  -NonInteractive -Command …`) and **cmd** (`cmd /C …`); Linux/macOS clients
+  use **sh** (`sh -c …`). The command is passed to the shell as a single
+  argument, so your quoting is preserved exactly. The console picks the right
+  shells for the client's OS automatically.
+- **Privileges.** Commands run as the agent's service account —
+  **LocalSystem** on Windows, **root** under systemd — so they can do
+  anything that account can. Treat this like a remote admin shell.
+- **Output.** stdout and stderr are captured line by line (stderr shown in
+  red), up to 5000 lines per command, and kept for later viewing. Use
+  **Remove** to delete a command and its output.
+- **Cancel** kills the whole process tree (the shell and anything it
+  started), not just the top process.
+- **Online only.** Unlike file transfers, commands are not queued — the
+  client must be connected. A command is not recorded if the client is
+  offline.
+
+This is ordinary remote administration, gated by the same admin login as the
+rest of the GUI (and no more powerful than the job pre/post hooks, which also
+run shell commands as the service account).
+
 ## Docker-host jobs
 
 With the containerized agent, host paths appear under `/host` (read-only).

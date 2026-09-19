@@ -222,6 +222,38 @@ curl -ksS -b "$JAR" -o "$WORK/pulled-big.bin" "$BASE/api/admin/transfers/$PL_ID/
 cmp "$FIX/sub/big.bin" "$WORK/pulled-big.bin" || fail "pulled file differs from source"
 pass "file pulled from client and downloaded intact (300KB binary)"
 
+say "Run a remote command on the client"
+command_status() { capi GET "/api/admin/commands/$1?since=0" | jq -r .command.Status; }
+command_finished() { [[ "$(command_status "$1")" =~ ^(success|error|cancelled)$ ]]; }
+CMD=$(capi POST "/api/admin/agents/$AGENT_ID/commands" '{"command":"echo hello-from-client; echo oops 1>&2"}' | jq -r .command_id)
+[ -n "$CMD" ] && [ "$CMD" != null ] || fail "command create"
+wait_for 20 "command to finish" command_finished "$CMD"
+CRES=$(capi GET "/api/admin/commands/$CMD?since=0")
+echo "$CRES" | jq -e '.command.Status=="success" and .command.ExitCode==0' >/dev/null || fail "command status: $CRES"
+echo "$CRES" | jq -e '[.output[]|select(.stream=="stdout" and .line=="hello-from-client")]|length==1' >/dev/null || fail "stdout not captured: $CRES"
+echo "$CRES" | jq -e '[.output[]|select(.stream=="stderr" and .line=="oops")]|length==1' >/dev/null || fail "stderr not captured: $CRES"
+pass "command ran; stdout and stderr streamed back"
+
+say "Non-zero exit is reported"
+CMD2=$(capi POST "/api/admin/agents/$AGENT_ID/commands" '{"command":"exit 5"}' | jq -r .command_id)
+wait_for 20 "command to finish" command_finished "$CMD2"
+capi GET "/api/admin/commands/$CMD2?since=0" | jq -e '.command.Status=="error" and .command.ExitCode==5' >/dev/null \
+    || fail "non-zero exit not reported: $(capi GET /api/admin/commands/$CMD2?since=0)"
+pass "exit code 5 surfaced as an error"
+
+say "Cancel a running command"
+CMD3=$(capi POST "/api/admin/agents/$AGENT_ID/commands" '{"command":"sleep 30"}' | jq -r .command_id)
+for i in $(seq 1 200); do
+    st=$(command_status "$CMD3")
+    [ "$st" = running ] && break
+    [[ "$st" =~ ^(success|error|cancelled)$ ]] && break
+    sleep 0.05
+done
+capi POST "/api/admin/commands/$CMD3/cancel" | jq -e .ok >/dev/null || fail "cancel request failed"
+wait_for 20 "command to cancel" command_finished "$CMD3"
+[ "$(command_status "$CMD3")" = cancelled ] || fail "expected cancelled, got $(command_status "$CMD3")"
+pass "running command cancelled (process tree killed)"
+
 say "Cancel a running backup"
 CANCEL_FIX="$WORK/cancel-fixture"
 mkdir -p "$CANCEL_FIX"

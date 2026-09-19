@@ -38,6 +38,10 @@ type Agent struct {
 	xferMu sync.Mutex
 	xfers  map[string]context.CancelFunc
 
+	// Remote commands likewise run independently and concurrently.
+	cmdMu sync.Mutex
+	cmds  map[string]context.CancelFunc
+
 	cfg *localConfig // agent.yaml state (see config.go)
 }
 
@@ -76,6 +80,7 @@ func New(stateDir, configPath string) (*Agent, error) {
 		creds:      creds,
 		client:     newServerClient(creds),
 		xfers:      map[string]context.CancelFunc{},
+		cmds:       map[string]context.CancelFunc{},
 	}
 	a.cfg = newLocalConfig(a)
 	return a, nil
@@ -246,6 +251,28 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 			return
 		}
 		go a.handleBrowseDir(cmd)
+
+	case proto.MsgRunCommand:
+		cmd, err := unmarshalMsg[proto.RunCommand](env.Data)
+		if err != nil {
+			log.Printf("bad run_command message: %v", err)
+			return
+		}
+		go a.runCommand(cmd)
+
+	case proto.MsgCancelCommand:
+		cancel, err := unmarshalMsg[proto.CancelCommand](env.Data)
+		if err != nil {
+			log.Printf("bad cancel_command message: %v", err)
+			return
+		}
+		a.cmdMu.Lock()
+		cancelFn := a.cmds[cancel.CommandID]
+		a.cmdMu.Unlock()
+		if cancelFn != nil {
+			log.Printf("[command %s] cancellation requested", cancel.CommandID)
+			cancelFn()
+		}
 
 	case proto.MsgCancelTransfer:
 		cancel, err := unmarshalMsg[proto.CancelTransfer](env.Data)
