@@ -67,16 +67,30 @@ Transfers run in the agent's background service, so nothing appears on the
 client's screen; progress and the result are visible only in the server GUI.
 Both directions are queued for offline clients and delivered on reconnect.
 
-### Browse client files
+### File explorer (two panes)
 
-**Browse client files** opens the client's filesystem (drive letters on
-Windows, `/` on Linux/macOS). Navigate into folders, then:
+**File explorer** opens a two-pane view: **this computer** on the left, the
+**client** on the right (drive letters on Windows, `/` on Linux/macOS).
+Navigate either side into folders, then copy a file across by **dragging it
+between the panes** or selecting it and clicking the **➡ / ⬅** arrows.
 
-- **Pull to server** on any file fetches it to the server (see below).
-- **Push file here** uploads a local file into the folder you're viewing.
+- **➡ push** copies the selected local file into the folder open in the
+  client pane.
+- **⬅ pull** copies the selected client file to this computer.
 
-Browsing needs the client online; it lists directories only and never reads
-file contents (that is what a pull does).
+The left "this computer" pane depends on the browser:
+
+- **Chrome / Edge:** click **Choose folder…** and grant a local folder; the
+  pane then lists its real contents, files you push are read straight from
+  it, and files you pull are written straight into it — a true two-pane copy.
+  (A browser page can only see a folder you explicitly grant, never your
+  whole disk.)
+- **Other browsers / no grant:** the local pane can't list folders, but you
+  can still **drag files from your file manager onto the client pane** to
+  push, and a pull downloads through the browser as normal.
+
+The client pane needs the client online; it lists directories only and never
+reads file contents (that is what a pull does).
 
 ### Pull a file from a client
 
@@ -89,9 +103,8 @@ backup job.
 
 ### Send (push) a file to a client
 
-Use **Send a file** (or **Push file here** in the browser). Choose a file
-and a destination path on the client; it is written to disk by the agent's
-background service.
+Use the explorer's **➡** arrow / drag, or **Send a file** to push by path.
+Either way the file is written to disk by the agent's background service.
 
 - **Destination path.** End it with `/` or `\` (or point it at an existing
   folder) to drop the file into that folder under its own name; otherwise

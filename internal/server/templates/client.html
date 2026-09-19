@@ -20,13 +20,14 @@
 
 <div class="page-head">
   <h2>File transfer</h2>
-  <button class="btn primary" onclick="openBrowser('')" id="browse-btn">🗂 Browse client files</button>
+  <button class="btn primary" onclick="openExplorer()" id="explorer-btn">🗂 File explorer</button>
   <button class="btn" onclick="el('send-dlg').showModal()">Send a file</button>
 </div>
-<p class="muted">Push a file to the client or pull one from it. Transfers run
-  in the background on the client — nothing appears on its screen — and are
-  observed only here. Offline clients receive queued pushes/pulls on
-  reconnect.</p>
+<p class="muted">Open the two-pane explorer to copy files between this computer
+  and the client (drag between panes, or use the arrow buttons), or use
+  <b>Send a file</b> to push one by path. Transfers run in the background on
+  the client — nothing appears on its screen. Offline clients receive queued
+  pushes on reconnect.</p>
 <table class="tbl" id="transfers-tbl">
   <thead><tr><th>Status</th><th></th><th>File</th><th>Path</th><th>Size</th><th>Progress</th><th>When</th><th></th></tr></thead>
   <tbody></tbody>
@@ -54,25 +55,39 @@
   </form>
 </dialog>
 
-<dialog id="browse-dlg" class="dlg wide">
+<dialog id="explorer-dlg" class="dlg explorer">
   <div class="page-head">
-    <h2 style="margin:0">Client files</h2>
+    <h2 style="margin:0">File explorer</h2>
     <span class="spacer"></span>
-    <button class="btn" type="button" onclick="el('browse-dlg').close()">Close</button>
+    <span id="explorer-status" class="muted"></span>
+    <button class="btn" type="button" onclick="closeExplorer()">Close</button>
   </div>
-  <div class="row" style="align-items:center;gap:.5rem;margin:.4rem 0">
-    <button class="btn sm" id="browse-up" onclick="browseUp()">⬆ Up</button>
-    <code id="browse-path" class="crumb"></code>
-    <span class="spacer"></span>
-    <label class="btn sm" style="margin:0;cursor:pointer">Push file here
-      <input type="file" id="browse-push" hidden onchange="pushHere()">
-    </label>
+  <div class="explorer-panes">
+    <section class="pane" id="local-pane">
+      <div class="pane-head">
+        <b>This computer</b>
+        <span class="spacer"></span>
+        <button class="btn sm" id="local-up" onclick="localUp()" hidden>⬆</button>
+        <button class="btn sm" id="local-pick" onclick="pickLocalFolder()">Choose folder…</button>
+      </div>
+      <code class="crumb" id="local-path"></code>
+      <div class="pane-list" id="local-list"></div>
+    </section>
+    <div class="explorer-mid">
+      <button class="btn" id="btn-push" title="Copy selected file to the client" onclick="transferSelected('push')">➡</button>
+      <button class="btn" id="btn-pull" title="Copy selected client file to this computer" onclick="transferSelected('pull')">⬅</button>
+    </div>
+    <section class="pane" id="client-pane">
+      <div class="pane-head">
+        <b>Client</b>
+        <span class="spacer"></span>
+        <button class="btn sm" id="client-up" onclick="clientUp()">⬆</button>
+      </div>
+      <code class="crumb" id="client-path"></code>
+      <div class="pane-list" id="client-list"></div>
+    </section>
   </div>
-  <p id="browse-err" class="muted" hidden></p>
-  <table class="tbl" id="browse-tbl">
-    <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
-    <tbody></tbody>
-  </table>
+  <p class="muted explorer-note" id="explorer-note"></p>
 </dialog>
 
 <div class="page-head">
@@ -117,9 +132,9 @@ async function load() {
   if (!a) { toast('client not found'); return; }
   el('agent-name').textContent = a.Name;
   el('agent-status').innerHTML = statusDot(a.online ? 'online' : 'offline') + (a.online ? ' online' : ' offline');
-  // Browsing needs a live connection; pushes can still be queued offline.
-  el('browse-btn').disabled = !a.online;
-  el('browse-btn').title = a.online ? '' : 'Client is offline';
+  // Browsing the client needs a live connection.
+  el('explorer-btn').disabled = !a.online;
+  el('explorer-btn').title = a.online ? '' : 'Client is offline';
   setShellOptions(a.OS);
   el('cmd-offline').hidden = a.online;
   el('cmd-input').disabled = !a.online;
@@ -218,109 +233,246 @@ function transferProgress(t) {
   return fmtBytes(t.BytesDone);
 }
 
-// ---- remote file browser ----
-// Entries are referenced from row handlers by integer index, never by
-// interpolating a filesystem path into HTML/JS (paths can contain quotes,
-// backslashes and angle brackets).
-let browsePath = '';
-let browseParent = '';
-let browseEntries = [];
-// Pulls started from the browser, keyed by the file's full path, so the row
-// you pulled from turns into a live status and then a Download link — right
-// where you clicked, not hidden behind the dialog.
-let pulls = {}; // path -> { id, status: 'pulling'|'ready'|'error' }
+// ---- two-pane file explorer ----
+// Left = this computer (via the File System Access API, Chrome/Edge, or a
+// desktop-drag / download fallback); right = the client (via the agent).
+// Files are copied by drag between panes or the arrow buttons. Local paths
+// are never interpolated into HTML — rows carry only an integer index.
+const FS_OK = 'showDirectoryPicker' in window;
 
-async function openBrowser(path) {
-  pulls = {};
-  el('browse-dlg').showModal();
-  await browseTo(path);
+// Local pane state.
+let localRoot = null;   // the FileSystemDirectoryHandle the user granted
+let localStack = [];    // handles from root to current dir (for "up")
+let localEntries = [];  // [{name, dir, handle}]
+let localSel = -1;
+
+// Client pane state.
+let clientPath = '', clientParent = '', clientEntries = [], clientSel = -1;
+
+function explNote(msg) { el('explorer-note').textContent = msg || ''; }
+function explStatus(msg) { el('explorer-status').textContent = msg || ''; }
+
+async function openExplorer() {
+  el('explorer-dlg').showModal();
+  localSel = clientSel = -1;
+  setupPaneDrop();
+  if (!FS_OK) {
+    el('local-pick').textContent = 'Pick file to push…';
+  }
+  renderLocal();
+  await clientTo('');
 }
-async function browseTo(path) {
-  el('browse-err').hidden = true;
-  const tbody = document.querySelector('#browse-tbl tbody');
-  tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
+function closeExplorer() { el('explorer-dlg').close(); }
+
+// ---------- client (remote) pane ----------
+async function clientTo(path) {
+  const list = el('client-list');
+  list.innerHTML = `<div class="muted pane-msg">Loading…</div>`;
   let l;
   try {
     l = await api('GET', `/api/admin/agents/${agentID}/browse?path=` + encodeURIComponent(path));
-  } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="4" class="muted">${esc(err.message)}</td></tr>`;
+  } catch (err) { list.innerHTML = `<div class="muted pane-msg">${esc(err.message)}</div>`; return; }
+  clientPath = l.path || ''; clientParent = l.parent || '';
+  clientEntries = l.entries || []; clientSel = -1;
+  el('client-path').textContent = clientPath || '(filesystem roots)';
+  el('client-up').disabled = !clientParent && clientPath === '';
+  renderClient(l.error);
+}
+function renderClient(errMsg) {
+  const list = el('client-list');
+  list.innerHTML = '';
+  if (errMsg) list.appendChild(paneMsg(errMsg));
+  clientEntries.forEach((e, i) => {
+    const row = entryRow(e.name, e.is_dir, e.is_dir ? '' : fmtBytes(e.size), i === clientSel);
+    if (e.is_dir) row.ondblclick = () => clientTo(e.path);
+    else {
+      row.onclick = () => { clientSel = i; renderClient(); };
+      row.draggable = true;
+      row.ondragstart = (ev) => ev.dataTransfer.setData('text/cb', 'client:' + i);
+    }
+    list.appendChild(row);
+  });
+  if (!clientEntries.length && !errMsg) list.appendChild(paneMsg('Empty folder.'));
+}
+function clientUp() {
+  if (clientParent) clientTo(clientParent);
+  else if (clientPath !== '') clientTo('');
+}
+
+// ---------- local pane ----------
+async function pickLocalFolder() {
+  if (!FS_OK) { // fallback: pick a single file to push
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.onchange = () => { if (inp.files[0]) pushLocalFile(inp.files[0]); };
+    inp.click();
     return;
   }
-  browsePath = l.path || '';
-  browseParent = l.parent || '';
-  browseEntries = l.entries || [];
-  el('browse-path').textContent = browsePath || '(filesystem roots)';
-  el('browse-up').disabled = !browseParent && browsePath === '';
-  if (l.error) { el('browse-err').hidden = false; el('browse-err').textContent = l.error; }
-  renderBrowseRows();
-}
-function pullActionCell(e, i) {
-  if (e.is_dir) return '';
-  const p = pulls[e.path];
-  if (!p) return `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`;
-  if (p.status === 'ready')
-    return `<a class="btn sm primary" href="/api/admin/transfers/${p.id}/download">⬇ Download</a>`;
-  if (p.status === 'error')
-    return `<span class="cmd-err">pull failed</span> <button class="btn sm" onclick="pullIdx(${i})">Retry</button>`;
-  return `<span class="muted">pulling…</span>`;
-}
-function renderBrowseRows() {
-  fillRows('browse-tbl', browseEntries.map((e, i) => [
-    e.is_dir
-      ? `<a href="#" onclick="browseIdx(${i});return false">📁 ${esc(e.name)}</a>`
-      : `📄 ${esc(e.name)}`,
-    e.is_dir ? '' : fmtBytes(e.size),
-    e.mtime ? fmtTime(e.mtime) : '',
-    pullActionCell(e, i),
-  ]), 'Empty folder.');
-}
-function browseIdx(i) { const e = browseEntries[i]; if (e) browseTo(e.path); }
-function browseUp() {
-  if (browseParent) browseTo(browseParent);
-  else if (browsePath !== '') browseTo(''); // step up to the roots list
-}
-async function pullIdx(i) {
-  const e = browseEntries[i];
-  if (!e) return;
   try {
-    const res = await api('POST', `/api/admin/agents/${agentID}/pull`, {source_path: e.path});
-    pulls[e.path] = {id: res.transfer_id, status: 'pulling'};
-    renderBrowseRows();     // row immediately shows "pulling…"
-    pollPull(e.path);
-    load();                 // also refresh the persistent transfers table
-  } catch (err) { toast(err.message); }
+    localRoot = await window.showDirectoryPicker({ mode: 'readwrite' });
+    localStack = [localRoot];
+    await renderLocal();
+  } catch (err) { /* user cancelled */ }
 }
-async function pollPull(path) {
-  const p = pulls[path];
-  if (!p) return;
-  let t;
-  try { t = await api('GET', `/api/admin/transfers/${p.id}`); }
-  catch { return; }
-  if (t.Status === 'success') p.status = 'ready';
-  else if (t.Status === 'error' || t.Status === 'cancelled') p.status = 'error';
-  else { setTimeout(() => pollPull(path), 1000); return; }
-  renderBrowseRows();       // swap "pulling…" for the Download link
+async function renderLocal() {
+  const list = el('local-list');
+  el('local-up').hidden = localStack.length <= 1;
+  if (!FS_OK) {
+    el('local-path').textContent = '';
+    list.innerHTML = '';
+    list.appendChild(paneMsg(
+      'Your browser can’t list local folders. Drag files from your file manager onto the client pane to push, and pulled files download normally. (Chrome or Edge enables a full local pane.)'));
+    return;
+  }
+  if (!localRoot) {
+    el('local-path').textContent = '';
+    list.innerHTML = '';
+    list.appendChild(paneMsg('Choose a folder to browse this computer.'));
+    return;
+  }
+  const dir = localStack[localStack.length - 1];
+  el('local-path').textContent = localStack.map(h => h.name).join('/') || '/';
+  list.innerHTML = `<div class="muted pane-msg">Loading…</div>`;
+  const entries = [];
+  try {
+    for await (const [name, handle] of dir.entries()) {
+      entries.push({ name, dir: handle.kind === 'directory', handle });
+    }
+  } catch (err) { list.innerHTML = ''; list.appendChild(paneMsg(esc(err.message))); return; }
+  entries.sort((a, b) => (a.dir !== b.dir) ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name));
+  localEntries = entries; localSel = -1;
+  list.innerHTML = '';
+  entries.forEach((e, i) => {
+    const row = entryRow(e.name, e.dir, '', i === localSel);
+    if (e.dir) row.ondblclick = async () => { localStack.push(e.handle); await renderLocal(); };
+    else {
+      row.onclick = () => { localSel = i; renderLocal(); };
+      row.draggable = true;
+      row.ondragstart = (ev) => ev.dataTransfer.setData('text/cb', 'local:' + i);
+    }
+    list.appendChild(row);
+  });
+  if (!entries.length) list.appendChild(paneMsg('Empty folder.'));
 }
-async function pushHere() {
-  const input = el('browse-push');
-  const f = input.files[0];
-  if (!f) return;
-  if (!browsePath) { toast('open a folder first'); input.value = ''; return; }
-  const dir = browsePath.endsWith('/') ? browsePath : browsePath + '/';
+async function localUp() {
+  if (localStack.length > 1) { localStack.pop(); await renderLocal(); }
+}
+
+// ---------- shared row helpers ----------
+function entryRow(name, isDir, meta, selected) {
+  const row = document.createElement('div');
+  row.className = 'entry' + (selected ? ' sel' : '') + (isDir ? ' dir' : '');
+  const n = document.createElement('span');
+  n.className = 'entry-name';
+  n.textContent = (isDir ? '📁 ' : '📄 ') + name;
+  row.appendChild(n);
+  if (meta) { const m = document.createElement('span'); m.className = 'entry-meta'; m.textContent = meta; row.appendChild(m); }
+  return row;
+}
+function paneMsg(msg) { const d = document.createElement('div'); d.className = 'muted pane-msg'; d.textContent = msg; return d; }
+
+// ---------- transfers ----------
+function transferSelected(dir) {
+  if (dir === 'push') {
+    if (localSel < 0 || !localEntries[localSel]) { toast('select a local file first'); return; }
+    pushLocalHandle(localEntries[localSel].handle);
+  } else {
+    if (clientSel < 0 || !clientEntries[clientSel]) { toast('select a client file first'); return; }
+    pullClientEntry(clientEntries[clientSel]);
+  }
+}
+async function pushLocalHandle(handle) {
+  try { pushLocalFile(await handle.getFile()); }
+  catch (err) { toast(err.message); }
+}
+async function pushLocalFile(file) {
+  if (!clientPath) { toast('open a folder in the client pane first'); return; }
+  const dir = clientPath.endsWith('/') || clientPath.endsWith('\\') ? clientPath : clientPath + '/';
   const fd = new FormData();
-  fd.append('file', f);
+  fd.append('file', file);
   fd.append('dest_path', dir);
   fd.append('overwrite', '0');
+  explStatus('Pushing ' + file.name + '…');
   try {
     const res = await fetch(`/api/admin/agents/${agentID}/transfers`, {
       method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: fd,
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || res.statusText);
-    toast('Pushing file to ' + dir);
+    explStatus('');
+    explNote('Pushed ' + file.name + ' → ' + dir);
+    await clientTo(clientPath); // reveal the new file
     load();
-  } catch (err) { toast(err.message); }
-  input.value = '';
+  } catch (err) { explStatus(''); toast(err.message); }
+}
+async function pullClientEntry(e) {
+  if (e.is_dir) { toast('folders can’t be transferred yet — open it and pick files'); return; }
+  explStatus('Pulling ' + e.name + '…');
+  try {
+    const res = await api('POST', `/api/admin/agents/${agentID}/pull`, {source_path: e.path});
+    const id = res.transfer_id;
+    // Wait for the file to reach the server.
+    for (;;) {
+      await new Promise(r => setTimeout(r, 800));
+      const t = await api('GET', `/api/admin/transfers/${id}`);
+      if (t.Status === 'success') break;
+      if (t.Status === 'error' || t.Status === 'cancelled') throw new Error('pull failed on the client');
+    }
+    load();
+    // Deliver it: into the chosen local folder if we have one, else download.
+    if (FS_OK && localRoot) {
+      const dir = localStack[localStack.length - 1];
+      const blob = await (await fetch(`/api/admin/transfers/${id}/download`, { headers: { 'X-Requested-With': 'fetch' } })).blob();
+      const fh = await dir.getFileHandle(e.name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(blob);
+      await w.close();
+      explStatus('');
+      explNote('Saved ' + e.name + ' to ' + el('local-path').textContent);
+      await renderLocal();
+    } else {
+      explStatus('');
+      explNote('Pulled ' + e.name + ' — downloading…');
+      const a = document.createElement('a');
+      a.href = `/api/admin/transfers/${id}/download`;
+      a.download = e.name;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+  } catch (err) { explStatus(''); toast(err.message); }
+}
+
+// ---------- drag & drop between panes (and from the desktop) ----------
+function setupPaneDrop() {
+  const client = el('client-list'), local = el('local-list');
+  if (client.dataset.wired) return;
+  client.dataset.wired = local.dataset.wired = '1';
+
+  const over = (ev) => { ev.preventDefault(); ev.currentTarget.classList.add('drop'); };
+  const leave = (ev) => ev.currentTarget.classList.remove('drop');
+  client.addEventListener('dragover', over);
+  client.addEventListener('dragleave', leave);
+  local.addEventListener('dragover', over);
+  local.addEventListener('dragleave', leave);
+
+  client.addEventListener('drop', (ev) => {
+    ev.preventDefault(); client.classList.remove('drop');
+    // Files dragged from the OS file manager → push each.
+    if (ev.dataTransfer.files && ev.dataTransfer.files.length) {
+      for (const f of ev.dataTransfer.files) pushLocalFile(f);
+      return;
+    }
+    const d = ev.dataTransfer.getData('text/cb');
+    if (d.startsWith('local:')) transferOne('push', +d.slice(6));
+  });
+  local.addEventListener('drop', (ev) => {
+    ev.preventDefault(); local.classList.remove('drop');
+    const d = ev.dataTransfer.getData('text/cb');
+    if (d.startsWith('client:')) transferOne('pull', +d.slice(7));
+  });
+}
+function transferOne(dir, i) {
+  if (dir === 'push') { if (localEntries[i]) pushLocalHandle(localEntries[i].handle); }
+  else { if (clientEntries[i]) pullClientEntry(clientEntries[i]); }
 }
 el('send-form').addEventListener('submit', async (e) => {
   e.preventDefault();
