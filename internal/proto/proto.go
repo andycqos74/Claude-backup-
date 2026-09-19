@@ -32,12 +32,20 @@ const (
 	MsgRunDone         = "run_done"
 	MsgDockerInventory = "docker_inventory"
 
+	// agent -> server (file push)
+	MsgTransferProgress = "transfer_progress"
+	MsgTransferDone     = "transfer_done"
+
 	// server -> agent
 	MsgJobsUpdate     = "jobs_update"
 	MsgRunBackup      = "run_backup"
 	MsgRestore        = "restore"
 	MsgCancelRun      = "cancel_run"
 	MsgDiscoverDocker = "discover_docker"
+
+	// server -> agent (file push)
+	MsgPushFile       = "push_file"
+	MsgCancelTransfer = "cancel_transfer"
 )
 
 // Run modes.
@@ -218,6 +226,46 @@ type RunDone struct {
 	SnapshotID string   `json:"snapshot_id,omitempty"`
 	Stats      RunStats `json:"stats"`
 	Error      string   `json:"error,omitempty"`
+}
+
+// PushFile instructs the agent to fetch one file the admin uploaded on the
+// server and write it to the client's disk in the background. The agent is
+// a headless service, so nothing appears on the client's screen; progress
+// is reported back to the server only. The payload itself travels over the
+// authenticated HTTPS data plane (like blobs), not the control socket.
+type PushFile struct {
+	TransferID string `json:"transfer_id"`
+	// DestPath is where to write on the client. A path ending in a slash or
+	// backslash (or naming an existing directory) is treated as a target
+	// directory and Filename is appended; otherwise it is the full target
+	// filename.
+	DestPath  string `json:"dest_path"`
+	Filename  string `json:"filename"`
+	Hash      string `json:"hash"` // sha256 hex of the raw content, verified on arrival
+	Size      int64  `json:"size"`
+	Mode      uint32 `json:"mode,omitempty"` // unix perms; ignored on Windows
+	Overwrite bool   `json:"overwrite"`
+}
+
+// TransferProgress is streamed while a pushed file is being written.
+type TransferProgress struct {
+	TransferID string `json:"transfer_id"`
+	BytesDone  int64  `json:"bytes_done"`
+	BytesTotal int64  `json:"bytes_total"`
+}
+
+// TransferDone finalises a file push. Status is one of the Run* terminal
+// statuses (success | error | cancelled).
+type TransferDone struct {
+	TransferID string `json:"transfer_id"`
+	Status     string `json:"status"`
+	Path       string `json:"path,omitempty"` // the absolute path actually written
+	Error      string `json:"error,omitempty"`
+}
+
+// CancelTransfer asks the agent to abort an in-progress file push.
+type CancelTransfer struct {
+	TransferID string `json:"transfer_id"`
 }
 
 // ManifestEntry is one line of a snapshot manifest (JSONL, zstd-compressed

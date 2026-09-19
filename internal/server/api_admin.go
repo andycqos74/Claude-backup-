@@ -62,6 +62,11 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/admin/agents/{id}", s.adminAuth(s.handleAgentDelete))
 	mux.HandleFunc("POST /api/admin/tokens", s.adminAuth(s.handleTokenCreate))
 	mux.HandleFunc("GET /api/admin/agents/{id}/docker", s.adminAuth(s.handleAgentDocker))
+	mux.HandleFunc("POST /api/admin/agents/{id}/transfers", s.adminAuth(s.handleTransferCreate))
+	mux.HandleFunc("GET /api/admin/transfers", s.adminAuth(s.handleTransfersList))
+	mux.HandleFunc("GET /api/admin/transfers/{id}", s.adminAuth(s.handleTransferGet))
+	mux.HandleFunc("POST /api/admin/transfers/{id}/cancel", s.adminAuth(s.handleTransferCancel))
+	mux.HandleFunc("DELETE /api/admin/transfers/{id}", s.adminAuth(s.handleTransferDelete))
 	mux.HandleFunc("GET /api/admin/installer", s.adminAuth(s.handleInstaller))
 	mux.HandleFunc("GET /api/admin/jobs", s.adminAuth(s.handleJobsList))
 	mux.HandleFunc("POST /api/admin/jobs", s.adminAuth(s.handleJobSave))
@@ -212,6 +217,12 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 		if err := s.deleteSnapshot(sn.ID); err != nil {
 			httpError(w, http.StatusInternalServerError, "snapshot delete failed")
 			return
+		}
+	}
+	// Drop any parked file-push payloads for this client from the backend.
+	if keys, err := s.store.TransferKeysForAgent(id); err == nil {
+		for _, k := range keys {
+			s.backend().Delete(k)
 		}
 	}
 	if err := s.store.DeleteAgent(id); err != nil {

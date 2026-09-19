@@ -18,6 +18,39 @@
   <tbody></tbody>
 </table>
 
+<div class="page-head">
+  <h2>Send a file</h2>
+  <button class="btn primary" onclick="el('send-dlg').showModal()">＋ Send file to client</button>
+</div>
+<p class="muted">The file is written on the client in the background by its
+  service — nothing appears on the client's screen. Progress is shown here.</p>
+<table class="tbl" id="transfers-tbl">
+  <thead><tr><th>Status</th><th>File</th><th>Destination</th><th>Size</th><th>Progress</th><th>When</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<dialog id="send-dlg" class="dlg">
+  <h2>Send a file to this client</h2>
+  <form id="send-form">
+    <label>File
+      <input type="file" id="send-file" required>
+    </label>
+    <label>Destination path on the client
+      <input type="text" id="send-dest" placeholder="e.g. C:\ProgramData\app\config.yaml or /etc/app/" required>
+    </label>
+    <p class="muted">End the path with <code>\</code> or <code>/</code> (or give an
+      existing folder) to drop the file in that folder under its own name;
+      otherwise the path is the full target filename.</p>
+    <label class="check">
+      <input type="checkbox" id="send-overwrite"> Overwrite if it already exists
+    </label>
+    <div class="row" style="margin-top:1rem">
+      <button class="btn primary" type="submit">Send</button>
+      <button class="btn" type="button" onclick="el('send-dlg').close()">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
 <h2>Snapshots</h2>
 <table class="tbl" id="snaps-tbl">
   <thead><tr><th>Created</th><th>Job</th><th>Mode</th><th>Files</th><th>Size</th><th></th></tr></thead>
@@ -62,6 +95,19 @@ async function load() {
      <button class="btn sm danger" onclick="delSnap('${s.ID}')">Delete</button>`,
   ]), 'No snapshots yet.');
 
+  const transfers = await api('GET', '/api/admin/transfers?agent=' + agentID);
+  fillRows('transfers-tbl', transfers.map(t => [
+    statusBadge(t.Status),
+    esc(t.Filename),
+    esc(t.WrittenPath || t.DestPath),
+    fmtBytes(t.Size),
+    transferProgress(t),
+    fmtTime(t.CreatedAt),
+    (t.Status === 'running' || t.Status === 'queued')
+      ? `<button class="btn sm danger" onclick="cancelTransfer('${t.ID}')">Cancel</button>`
+      : `<button class="btn sm" onclick="delTransfer('${t.ID}')">Remove</button>`,
+  ]), 'No files sent yet.');
+
   const runs = await api('GET', '/api/admin/runs?agent=' + agentID);
   fillRows('runs-tbl', runs.map(r => [
     statusBadge(r.Status),
@@ -86,6 +132,45 @@ async function cancelRun(id) {
     // The run only actually stops once the agent reports back; the
     // existing 5s auto-refresh picks that up without racing it here.
   } catch (err) { toast(err.message); }
+}
+function transferProgress(t) {
+  if (t.Status === 'success') return '✓ delivered';
+  if (t.Status === 'queued') return '<span class="muted">client offline — queued</span>';
+  if (t.Status === 'error' || t.Status === 'cancelled') return '—';
+  // running
+  const pct = t.Size > 0 ? Math.min(100, Math.round((t.BytesDone / t.Size) * 100)) : 0;
+  return `${fmtBytes(t.BytesDone)} / ${fmtBytes(t.Size)} (${pct}%)`;
+}
+el('send-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = el('send-file').files[0];
+  if (!f) { toast('choose a file'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('dest_path', el('send-dest').value);
+  fd.append('overwrite', el('send-overwrite').checked ? '1' : '0');
+  try {
+    const res = await fetch(`/api/admin/agents/${agentID}/transfers`, {
+      method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    toast(data.queued ? 'Client offline — file queued for delivery' : 'Sending file to client');
+    el('send-dlg').close();
+    el('send-form').reset();
+    load();
+  } catch (err) { toast(err.message); }
+});
+async function cancelTransfer(id) {
+  try {
+    await api('POST', `/api/admin/transfers/${id}/cancel`);
+    toast('Cancellation requested');
+  } catch (err) { toast(err.message); }
+}
+async function delTransfer(id) {
+  if (!confirm('Remove this transfer record and its stored copy on the server?')) return;
+  await api('DELETE', `/api/admin/transfers/${id}`);
+  load();
 }
 async function delSnap(id) {
   if (!confirm('Delete this snapshot? Its data is removed at the next cleanup.')) return;
