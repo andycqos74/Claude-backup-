@@ -12,6 +12,8 @@ CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/bac
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/agents/backup-agent-linux-amd64 ./cmd/agent
 CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/agents/backup-agent-linux-arm64 ./cmd/agent
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/agents/backup-agent-windows-amd64.exe ./cmd/agent
+# 32-bit Windows, for the remaining x86-only machines. See docs/deployment.md.
+CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "$LDFLAGS" -o dist/agents/backup-agent-windows-386.exe ./cmd/agent
 
 echo "Done:"
 ls -lh dist dist/agents
