@@ -15,11 +15,14 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/age
 # 32-bit Windows, for the remaining x86-only machines. See docs/deployment.md.
 CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "$LDFLAGS" -o dist/agents/backup-agent-windows-386.exe ./cmd/agent
 
-# Legacy 32-bit build for Windows 7 SP1 / POSReady 7 (needs the Go 1.20
-# toolchain; fetched on demand via GOPROXY). Best-effort: a failure here
-# (e.g. offline) does not fail the whole release.
-if ! VERSION="$VERSION" ./scripts/build-legacy-agent.sh dist/agents; then
-    echo "WARNING: legacy Windows 7 agent build failed or was skipped" >&2
+# Legacy 32-bit build for Windows 7 SP1 / POSReady 7. It is built out-of-band
+# with the Go 1.20 toolchain and committed under deploy/prebuilt (regenerate
+# with scripts/build-legacy-agent.sh when the agent changes); here we just
+# ship that committed copy so a release never depends on a 1.20 toolchain.
+if [ -f deploy/prebuilt/backup-agent-windows-386-legacy.exe ]; then
+    cp deploy/prebuilt/backup-agent-windows-386-legacy.exe dist/agents/
+else
+    echo "WARNING: deploy/prebuilt/backup-agent-windows-386-legacy.exe missing; run scripts/build-legacy-agent.sh deploy/prebuilt" >&2
 fi
 
 echo "Done:"
