@@ -133,8 +133,10 @@ CREATE TABLE IF NOT EXISTS blobs (
 CREATE TABLE IF NOT EXISTS transfers (
 	id TEXT PRIMARY KEY,
 	agent_id TEXT NOT NULL,
+	direction TEXT NOT NULL DEFAULT 'push',
 	filename TEXT NOT NULL,
-	dest_path TEXT NOT NULL,
+	dest_path TEXT NOT NULL DEFAULT '',
+	source_path TEXT NOT NULL DEFAULT '',
 	size INTEGER NOT NULL DEFAULT 0,
 	hash TEXT NOT NULL DEFAULT '',
 	object_key TEXT NOT NULL DEFAULT '',
@@ -153,7 +155,27 @@ CREATE INDEX IF NOT EXISTS idx_transfers_agent ON transfers(agent_id, created_at
 	if err != nil {
 		return err
 	}
-	return s.migrateBackendScoping()
+	if err := s.migrateBackendScoping(); err != nil {
+		return err
+	}
+	return s.migrateTransferDirection()
+}
+
+// migrateTransferDirection adds the pull direction to a transfers table
+// created before pulls existed (the first cut only supported server->client
+// pushes). Existing rows are pushes.
+func (s *Store) migrateTransferDirection() error {
+	if !s.columnExists("transfers", "direction") {
+		if _, err := s.db.Exec(`ALTER TABLE transfers ADD COLUMN direction TEXT NOT NULL DEFAULT 'push'`); err != nil {
+			return err
+		}
+	}
+	if !s.columnExists("transfers", "source_path") {
+		if _, err := s.db.Exec(`ALTER TABLE transfers ADD COLUMN source_path TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateBackendScoping adds a `backend` dimension to the blobs and

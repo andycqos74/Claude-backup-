@@ -58,14 +58,40 @@ The agent state directory contains `creds.json` (agent identity — protect
 it) and cached manifests (`manifest-<job>.jsonl.zst`) used to speed up
 incrementals; deleting caches is safe, the agent refetches from the server.
 
-## Sending a file to a client
+## Transferring files with a client
 
-A client's page has a **Send file to client** button (Clients → pick a
-client). Choose a file and a destination path on that client, then send it.
-The file is delivered over the same authenticated, fingerprint-pinned
-channel the agent already uses, and written to disk by the agent's
-background service — nothing is shown on the client's screen. Progress and
-the final result are visible only here, in the server GUI.
+A client's page (Clients → pick a client) has a **File transfer** section
+that moves files either direction between the server and that client, always
+over the authenticated, fingerprint-pinned channel the agent already uses.
+Transfers run in the agent's background service, so nothing appears on the
+client's screen; progress and the result are visible only in the server GUI.
+Both directions are queued for offline clients and delivered on reconnect.
+
+### Browse client files
+
+**Browse client files** opens the client's filesystem (drive letters on
+Windows, `/` on Linux/macOS). Navigate into folders, then:
+
+- **Pull to server** on any file fetches it to the server (see below).
+- **Push file here** uploads a local file into the folder you're viewing.
+
+Browsing needs the client online; it lists directories only and never reads
+file contents (that is what a pull does).
+
+### Pull a file from a client
+
+Pulling copies a file off the client to the server, where a **Download**
+button appears on the transfer once it completes. The agent reads the file
+(with the service's privileges — LocalSystem or root), streams it
+compressed to the server, and the server verifies its hash before storing
+it. Use it to retrieve a log, a config or a diagnostic without a full
+backup job.
+
+### Send (push) a file to a client
+
+Use **Send a file** (or **Push file here** in the browser). Choose a file
+and a destination path on the client; it is written to disk by the agent's
+background service.
 
 - **Destination path.** End it with `/` or `\` (or point it at an existing
   folder) to drop the file into that folder under its own name; otherwise
@@ -73,19 +99,18 @@ the final result are visible only here, in the server GUI.
   `C:\ProgramData\app\config.yaml` or `/etc/app/config.yaml`.
 - **Overwrite.** Off by default: if the target already exists the transfer
   fails rather than clobbering it. Tick *Overwrite* to replace it.
-- **Offline clients.** The push is queued and delivered automatically when
-  the client next reconnects.
 - **Integrity.** The content is hashed on upload and re-verified on the
   client before the file is moved into place (an atomic rename), so a
   partial or corrupted transfer never leaves a half-written file.
 - **Permissions.** The agent runs as LocalSystem (Windows) or root
   (systemd), so it writes with those privileges. On Windows the service can
   reach paths a normal user cannot; there is no interactive prompt.
-- **Housekeeping.** The uploaded copy is kept on the server (in the active
-  storage backend) until you *Remove* the transfer, so its status stays
-  auditable and it can be re-sent. Removing a client also removes its
-  parked payloads. Pushes are meant for configs, scripts and small
-  installers (capped at 2 GiB); use a backup job for bulk data.
+- **Housekeeping.** Each transfer's stored copy (the file to push, or the
+  file pulled back) is kept on the server in the active storage backend
+  until you *Remove* the transfer, so its status stays auditable, a push can
+  be re-sent and a pull re-downloaded. Removing a client also removes its
+  parked payloads. Transfers are meant for configs, scripts, logs and small
+  installers (capped at 2 GiB each); use a backup job for bulk data.
 
 ## Docker-host jobs
 

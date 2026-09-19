@@ -13,8 +13,10 @@ import (
 type Transfer struct {
 	ID          string
 	AgentID     string
+	Direction   string // push (server->client) | pull (client->server)
 	Filename    string
-	DestPath    string
+	DestPath    string // push: where to write on the client
+	SourcePath  string // pull: which file to read off the client
 	Size        int64
 	Hash        string
 	ObjectKey   string
@@ -29,15 +31,15 @@ type Transfer struct {
 	FinishedAt  int64
 }
 
-const transferCols = `id, agent_id, filename, dest_path, size, hash, object_key, mode, overwrite,
+const transferCols = `id, agent_id, direction, filename, dest_path, source_path, size, hash, object_key, mode, overwrite,
 	status, error, written_path, bytes_done, created_at, started_at, finished_at`
 
 func scanTransfer(scan func(dest ...any) error) (*Transfer, error) {
 	var t Transfer
 	var overwrite int
-	err := scan(&t.ID, &t.AgentID, &t.Filename, &t.DestPath, &t.Size, &t.Hash, &t.ObjectKey,
-		&t.Mode, &overwrite, &t.Status, &t.Error, &t.WrittenPath, &t.BytesDone,
-		&t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+	err := scan(&t.ID, &t.AgentID, &t.Direction, &t.Filename, &t.DestPath, &t.SourcePath,
+		&t.Size, &t.Hash, &t.ObjectKey, &t.Mode, &overwrite, &t.Status, &t.Error, &t.WrittenPath,
+		&t.BytesDone, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -59,11 +61,22 @@ func (s *Store) CreateTransfer(t Transfer) error {
 	if t.Overwrite {
 		overwrite = 1
 	}
+	direction := t.Direction
+	if direction == "" {
+		direction = proto.DirectionPush
+	}
 	_, err := s.db.Exec(`INSERT INTO transfers
-		(id, agent_id, filename, dest_path, size, hash, object_key, mode, overwrite, status, created_at, started_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.AgentID, t.Filename, t.DestPath, t.Size, t.Hash, t.ObjectKey,
+		(id, agent_id, direction, filename, dest_path, source_path, size, hash, object_key, mode, overwrite, status, created_at, started_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.AgentID, direction, t.Filename, t.DestPath, t.SourcePath, t.Size, t.Hash, t.ObjectKey,
 		t.Mode, overwrite, t.Status, now(), started)
+	return err
+}
+
+// SetTransferPayload records the payload details a pull produced once the
+// agent has uploaded the file to the server.
+func (s *Store) SetTransferPayload(id, hash string, size int64) error {
+	_, err := s.db.Exec(`UPDATE transfers SET hash = ?, size = ? WHERE id = ?`, hash, size, id)
 	return err
 }
 

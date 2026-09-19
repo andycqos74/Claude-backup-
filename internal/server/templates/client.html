@@ -19,13 +19,16 @@
 </table>
 
 <div class="page-head">
-  <h2>Send a file</h2>
-  <button class="btn primary" onclick="el('send-dlg').showModal()">＋ Send file to client</button>
+  <h2>File transfer</h2>
+  <button class="btn primary" onclick="openBrowser('')" id="browse-btn">🗂 Browse client files</button>
+  <button class="btn" onclick="el('send-dlg').showModal()">Send a file</button>
 </div>
-<p class="muted">The file is written on the client in the background by its
-  service — nothing appears on the client's screen. Progress is shown here.</p>
+<p class="muted">Push a file to the client or pull one from it. Transfers run
+  in the background on the client — nothing appears on its screen — and are
+  observed only here. Offline clients receive queued pushes/pulls on
+  reconnect.</p>
 <table class="tbl" id="transfers-tbl">
-  <thead><tr><th>Status</th><th>File</th><th>Destination</th><th>Size</th><th>Progress</th><th>When</th><th></th></tr></thead>
+  <thead><tr><th>Status</th><th></th><th>File</th><th>Path</th><th>Size</th><th>Progress</th><th>When</th><th></th></tr></thead>
   <tbody></tbody>
 </table>
 
@@ -51,6 +54,27 @@
   </form>
 </dialog>
 
+<dialog id="browse-dlg" class="dlg wide">
+  <div class="page-head">
+    <h2 style="margin:0">Client files</h2>
+    <span class="spacer"></span>
+    <button class="btn" type="button" onclick="el('browse-dlg').close()">Close</button>
+  </div>
+  <div class="row" style="align-items:center;gap:.5rem;margin:.4rem 0">
+    <button class="btn sm" id="browse-up" onclick="browseUp()">⬆ Up</button>
+    <code id="browse-path" class="crumb"></code>
+    <span class="spacer"></span>
+    <label class="btn sm" style="margin:0;cursor:pointer">Push file here
+      <input type="file" id="browse-push" hidden onchange="pushHere()">
+    </label>
+  </div>
+  <p id="browse-err" class="muted" hidden></p>
+  <table class="tbl" id="browse-tbl">
+    <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</dialog>
+
 <h2>Snapshots</h2>
 <table class="tbl" id="snaps-tbl">
   <thead><tr><th>Created</th><th>Job</th><th>Mode</th><th>Files</th><th>Size</th><th></th></tr></thead>
@@ -73,6 +97,9 @@ async function load() {
   if (!a) { toast('client not found'); return; }
   el('agent-name').textContent = a.Name;
   el('agent-status').innerHTML = statusDot(a.online ? 'online' : 'offline') + (a.online ? ' online' : ' offline');
+  // Browsing needs a live connection; pushes can still be queued offline.
+  el('browse-btn').disabled = !a.online;
+  el('browse-btn').title = a.online ? '' : 'Client is offline';
   el('agent-meta').textContent =
     `${a.Hostname} · ${a.OS}/${a.Arch} · agent ${a.Version || '?'} · last seen ${fmtTime(a.LastSeen)} · id ${a.ID}`;
 
@@ -96,17 +123,28 @@ async function load() {
   ]), 'No snapshots yet.');
 
   const transfers = await api('GET', '/api/admin/transfers?agent=' + agentID);
-  fillRows('transfers-tbl', transfers.map(t => [
-    statusBadge(t.Status),
-    esc(t.Filename),
-    esc(t.WrittenPath || t.DestPath),
-    fmtBytes(t.Size),
-    transferProgress(t),
-    fmtTime(t.CreatedAt),
-    (t.Status === 'running' || t.Status === 'queued')
-      ? `<button class="btn sm danger" onclick="cancelTransfer('${t.ID}')">Cancel</button>`
-      : `<button class="btn sm" onclick="delTransfer('${t.ID}')">Remove</button>`,
-  ]), 'No files sent yet.');
+  fillRows('transfers-tbl', transfers.map(t => {
+    const pull = t.Direction === 'pull';
+    const actions = [];
+    if (t.Status === 'running' || t.Status === 'queued') {
+      actions.push(`<button class="btn sm danger" onclick="cancelTransfer('${t.ID}')">Cancel</button>`);
+    } else {
+      if (pull && t.Status === 'success') {
+        actions.push(`<a class="btn sm" href="/api/admin/transfers/${t.ID}/download">Download</a>`);
+      }
+      actions.push(`<button class="btn sm" onclick="delTransfer('${t.ID}')">Remove</button>`);
+    }
+    return [
+      statusBadge(t.Status),
+      pull ? '<span title="pulled from client">⬇ pull</span>' : '<span title="pushed to client">⬆ push</span>',
+      esc(t.Filename),
+      esc(pull ? t.SourcePath : (t.WrittenPath || t.DestPath)),
+      fmtBytes(t.Size),
+      transferProgress(t),
+      fmtTime(t.CreatedAt),
+      actions.join(' '),
+    ];
+  }), 'No transfers yet.');
 
   const runs = await api('GET', '/api/admin/runs?agent=' + agentID);
   fillRows('runs-tbl', runs.map(r => [
@@ -134,12 +172,89 @@ async function cancelRun(id) {
   } catch (err) { toast(err.message); }
 }
 function transferProgress(t) {
-  if (t.Status === 'success') return '✓ delivered';
+  if (t.Status === 'success') return t.Direction === 'pull' ? '✓ received' : '✓ delivered';
   if (t.Status === 'queued') return '<span class="muted">client offline — queued</span>';
   if (t.Status === 'error' || t.Status === 'cancelled') return '—';
-  // running
-  const pct = t.Size > 0 ? Math.min(100, Math.round((t.BytesDone / t.Size) * 100)) : 0;
-  return `${fmtBytes(t.BytesDone)} / ${fmtBytes(t.Size)} (${pct}%)`;
+  // running — a pull may not know the total until it arrives.
+  if (t.Size > 0) {
+    const pct = Math.min(100, Math.round((t.BytesDone / t.Size) * 100));
+    return `${fmtBytes(t.BytesDone)} / ${fmtBytes(t.Size)} (${pct}%)`;
+  }
+  return fmtBytes(t.BytesDone);
+}
+
+// ---- remote file browser ----
+// Entries are referenced from row handlers by integer index, never by
+// interpolating a filesystem path into HTML/JS (paths can contain quotes,
+// backslashes and angle brackets).
+let browsePath = '';
+let browseParent = '';
+let browseEntries = [];
+
+async function openBrowser(path) {
+  el('browse-dlg').showModal();
+  await browseTo(path);
+}
+async function browseTo(path) {
+  el('browse-err').hidden = true;
+  const tbody = document.querySelector('#browse-tbl tbody');
+  tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
+  let l;
+  try {
+    l = await api('GET', `/api/admin/agents/${agentID}/browse?path=` + encodeURIComponent(path));
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="muted">${esc(err.message)}</td></tr>`;
+    return;
+  }
+  browsePath = l.path || '';
+  browseParent = l.parent || '';
+  browseEntries = l.entries || [];
+  el('browse-path').textContent = browsePath || '(filesystem roots)';
+  el('browse-up').disabled = !browseParent && browsePath === '';
+  if (l.error) { el('browse-err').hidden = false; el('browse-err').textContent = l.error; }
+  fillRows('browse-tbl', browseEntries.map((e, i) => [
+    e.is_dir
+      ? `<a href="#" onclick="browseIdx(${i});return false">📁 ${esc(e.name)}</a>`
+      : `📄 ${esc(e.name)}`,
+    e.is_dir ? '' : fmtBytes(e.size),
+    e.mtime ? fmtTime(e.mtime) : '',
+    e.is_dir ? '' : `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`,
+  ]), 'Empty folder.');
+}
+function browseIdx(i) { const e = browseEntries[i]; if (e) browseTo(e.path); }
+function browseUp() {
+  if (browseParent) browseTo(browseParent);
+  else if (browsePath !== '') browseTo(''); // step up to the roots list
+}
+async function pullIdx(i) {
+  const e = browseEntries[i];
+  if (!e) return;
+  try {
+    await api('POST', `/api/admin/agents/${agentID}/pull`, {source_path: e.path});
+    toast('Pulling ' + e.name + ' from client');
+    load();
+  } catch (err) { toast(err.message); }
+}
+async function pushHere() {
+  const input = el('browse-push');
+  const f = input.files[0];
+  if (!f) return;
+  if (!browsePath) { toast('open a folder first'); input.value = ''; return; }
+  const dir = browsePath.endsWith('/') ? browsePath : browsePath + '/';
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('dest_path', dir);
+  fd.append('overwrite', '0');
+  try {
+    const res = await fetch(`/api/admin/agents/${agentID}/transfers`, {
+      method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    toast('Pushing file to ' + dir);
+    load();
+  } catch (err) { toast(err.message); }
+  input.value = '';
 }
 el('send-form').addEventListener('submit', async (e) => {
   e.preventDefault();

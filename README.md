@@ -40,11 +40,12 @@ compressed and deduplicated, stored on the server's local storage.
   and restore.
 - **Retention** per job (keep last N / newer than N days) with automatic
   garbage collection.
-- **Push files to a client**: send a config, script or small installer to a
-  client from the GUI. The agent writes it in the background (nothing shows
-  on the client's screen); the transfer, its progress and result are visible
-  only to the operator on the server. Queued for offline clients, hash-
-  verified, atomic on arrival. See [docs/operations.md](docs/operations.md).
+- **File transfer with a client**: browse a client's filesystem from the GUI
+  and **push** a file to it or **pull** one from it. The agent does the work
+  in the background (nothing shows on the client's screen); the transfer,
+  its progress and result are visible only to the operator on the server.
+  Queued for offline clients, hash-verified end to end. See
+  [docs/operations.md](docs/operations.md).
 - **Docker-aware**: containerized agent for Docker hosts with pre/post
   hooks (e.g. `pg_dump` before backup) and host-volume access. The job
   editor lists the client's **containers as tick-boxes**, grouped by

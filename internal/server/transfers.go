@@ -69,13 +69,20 @@ func (s *Server) storeTransferPayload(key string, src io.Reader) (hash string, r
 	return hex.EncodeToString(hasher.Sum(nil)), res.n, nil
 }
 
-// dispatchTransfer sends a push command to the agent, marking the transfer
-// failed if it cannot even be queued onto the connection.
+// dispatchTransfer sends the push or pull command to the agent, marking the
+// transfer failed if it cannot even be queued onto the connection.
 func (s *Server) dispatchTransfer(t *store.Transfer) {
-	ok := s.hub.Send(t.AgentID, proto.MsgPushFile, proto.PushFile{
-		TransferID: t.ID, DestPath: t.DestPath, Filename: t.Filename,
-		Hash: t.Hash, Size: t.Size, Mode: t.Mode, Overwrite: t.Overwrite,
-	})
+	var ok bool
+	if t.Direction == proto.DirectionPull {
+		ok = s.hub.Send(t.AgentID, proto.MsgPullFile, proto.PullFile{
+			TransferID: t.ID, SourcePath: t.SourcePath,
+		})
+	} else {
+		ok = s.hub.Send(t.AgentID, proto.MsgPushFile, proto.PushFile{
+			TransferID: t.ID, DestPath: t.DestPath, Filename: t.Filename,
+			Hash: t.Hash, Size: t.Size, Mode: t.Mode, Overwrite: t.Overwrite,
+		})
+	}
 	if !ok {
 		s.store.FinishTransfer(t.ID, proto.RunError, "", "failed to dispatch to client")
 	}
@@ -200,6 +207,49 @@ func (s *Server) handleTransferCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"transfer_id": id, "queued": !online})
 }
 
+// handleTransferPull starts a client->server file fetch: the admin names a
+// path on the client, and the agent uploads that file to the server where it
+// can be downloaded.
+func (s *Server) handleTransferPull(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if _, err := s.store.GetAgent(agentID); err != nil {
+		httpError(w, http.StatusNotFound, "unknown client")
+		return
+	}
+	req, err := decodeBody[struct {
+		SourcePath string `json:"source_path"`
+	}](r)
+	if err != nil || strings.TrimSpace(req.SourcePath) == "" {
+		httpError(w, http.StatusBadRequest, "a source path on the client is required")
+		return
+	}
+	src := strings.TrimSpace(req.SourcePath)
+	filename := path.Base(strings.ReplaceAll(src, "\\", "/"))
+	if filename == "." || filename == "/" || filename == "" {
+		httpError(w, http.StatusBadRequest, "source path does not name a file")
+		return
+	}
+
+	id := store.NewID()
+	online := s.hub.Online(agentID)
+	status := proto.RunRunning
+	if !online {
+		status = proto.RunQueued
+	}
+	t := store.Transfer{
+		ID: id, AgentID: agentID, Direction: proto.DirectionPull,
+		Filename: filename, SourcePath: src, ObjectKey: storage.TransferKey(id), Status: status,
+	}
+	if err := s.store.CreateTransfer(t); err != nil {
+		httpError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if online {
+		s.dispatchTransfer(&t)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"transfer_id": id, "queued": !online})
+}
+
 func (s *Server) handleTransfersList(w http.ResponseWriter, r *http.Request) {
 	transfers, err := s.store.ListTransfers(r.URL.Query().Get("agent"), 100)
 	if err != nil {
@@ -216,6 +266,35 @@ func (s *Server) handleTransferGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.transfersJSON([]store.Transfer{*t})[0])
+}
+
+// handleTransferDownload streams a pulled file back to the admin's browser,
+// decompressing it on the way.
+func (s *Server) handleTransferDownload(w http.ResponseWriter, r *http.Request) {
+	t, err := s.store.GetTransfer(r.PathValue("id"))
+	if err != nil {
+		httpError(w, http.StatusNotFound, "transfer not found")
+		return
+	}
+	if t.Direction != proto.DirectionPull || t.Status != proto.RunSuccess {
+		httpError(w, http.StatusConflict, "no downloadable file for this transfer")
+		return
+	}
+	rc, err := s.backend().Get(t.ObjectKey)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "payload not found")
+		return
+	}
+	defer rc.Close()
+	dec, err := zstd.NewReader(rc)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "decompress failed")
+		return
+	}
+	defer dec.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", t.Filename))
+	io.Copy(w, dec.IOReadCloser())
 }
 
 func (s *Server) handleTransferCancel(w http.ResponseWriter, r *http.Request) {
@@ -254,6 +333,55 @@ func (s *Server) transfersJSON(transfers []store.Transfer) []transferJSON {
 }
 
 // ---- agent data plane ----
+
+// handleTransferUpload ingests the file an agent read off its client for a
+// pull. The body is the zstd-compressed content; the server stores it and
+// records the raw size and hash on the transfer (verified by decompressing a
+// copy on the fly, exactly like a blob upload).
+func (s *Server) handleTransferUpload(w http.ResponseWriter, r *http.Request, agentID string) {
+	t, err := s.store.GetTransfer(r.PathValue("id"))
+	if err != nil || t.AgentID != agentID {
+		httpError(w, http.StatusNotFound, "transfer not found")
+		return
+	}
+	if t.Direction != proto.DirectionPull {
+		httpError(w, http.StatusBadRequest, "not a pull transfer")
+		return
+	}
+
+	pr, pw := io.Pipe()
+	hasher := sha256.New()
+	var rawSize int64
+	verify := make(chan error, 1)
+	go func() {
+		dec, err := zstd.NewReader(pr)
+		if err != nil {
+			pr.CloseWithError(err)
+			verify <- err
+			return
+		}
+		defer dec.Close()
+		n, err := io.Copy(hasher, dec.IOReadCloser())
+		rawSize = n
+		io.Copy(io.Discard, pr)
+		verify <- err
+	}()
+
+	_, putErr := s.backend().Put(t.ObjectKey, io.TeeReader(io.LimitReader(r.Body, transferMaxBytes+(1<<20)), pw))
+	pw.Close()
+	decErr := <-verify
+
+	if putErr != nil || decErr != nil {
+		s.backend().Delete(t.ObjectKey)
+		httpError(w, http.StatusBadRequest, "file upload failed")
+		return
+	}
+	if err := s.store.SetTransferPayload(t.ID, hex.EncodeToString(hasher.Sum(nil)), rawSize); err != nil {
+		httpError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
 
 // handleTransferContent streams a pushed file's (compressed) payload to the
 // agent it was addressed to.

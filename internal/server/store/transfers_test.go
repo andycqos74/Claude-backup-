@@ -46,6 +46,44 @@ func TestTransferLifecycle(t *testing.T) {
 	}
 }
 
+func TestPullTransferFields(t *testing.T) {
+	s := openTest(t)
+	// A pull starts with only the source path known; size/hash arrive later.
+	if err := s.CreateTransfer(Transfer{
+		ID: "p1", AgentID: "a1", Direction: proto.DirectionPull,
+		Filename: "current.log", SourcePath: "/var/log/current.log",
+		ObjectKey: "transfers/p1.zst", Status: proto.RunRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetTransfer("p1")
+	if got.Direction != proto.DirectionPull || got.SourcePath != "/var/log/current.log" {
+		t.Fatalf("pull round-trip wrong: %+v", got)
+	}
+	if got.Size != 0 || got.Hash != "" {
+		t.Errorf("pull should start with no size/hash: %+v", got)
+	}
+
+	if err := s.SetTransferPayload("p1", "deadbeef", 4096); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetTransfer("p1")
+	if got.Hash != "deadbeef" || got.Size != 4096 {
+		t.Errorf("SetTransferPayload not applied: %+v", got)
+	}
+}
+
+func TestTransferDefaultsToPush(t *testing.T) {
+	s := openTest(t)
+	// Direction left empty (the push path) is stored as push.
+	s.CreateTransfer(Transfer{ID: "x", AgentID: "a", Filename: "f", DestPath: "/d",
+		ObjectKey: "k", Status: proto.RunRunning})
+	got, _ := s.GetTransfer("x")
+	if got.Direction != proto.DirectionPush {
+		t.Errorf("empty direction should default to push, got %q", got.Direction)
+	}
+}
+
 func TestTransferQueueAndDispatch(t *testing.T) {
 	s := openTest(t)
 

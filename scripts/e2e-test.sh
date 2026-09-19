@@ -204,6 +204,24 @@ wait_for 30 "overwrite-guard push to finish" transfer_finished "$TR3_ID"
 [ "$(transfer_status "$TR3_ID")" = error ] || fail "expected error when overwriting without permission"
 pass "directory drop works; overwrite guard blocks clobbering"
 
+say "Browse the client's filesystem"
+BROWSE=$(capi GET "/api/admin/agents/$AGENT_ID/browse?path=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$FIX")")
+echo "$BROWSE" | jq -e --arg p "$FIX/a.txt" '.entries[] | select(.path==$p and .is_dir==false)' >/dev/null \
+    || fail "browse did not list a.txt: $BROWSE"
+echo "$BROWSE" | jq -e '.entries[] | select(.name=="sub" and .is_dir==true)' >/dev/null \
+    || fail "browse did not list sub/ as a directory"
+pass "remote directory listing works"
+
+say "Pull a file from the client to the server"
+PL=$(capi POST "/api/admin/agents/$AGENT_ID/pull" "{\"source_path\":\"$FIX/sub/big.bin\"}")
+PL_ID=$(echo "$PL" | jq -r .transfer_id)
+[ -n "$PL_ID" ] && [ "$PL_ID" != null ] || fail "pull create: $PL"
+wait_for 30 "pull to finish" transfer_finished "$PL_ID"
+[ "$(transfer_status "$PL_ID")" = success ] || { cat "$WORK/agent.log"; fail "pull status: $(capi GET /api/admin/transfers/$PL_ID)"; }
+curl -ksS -b "$JAR" -o "$WORK/pulled-big.bin" "$BASE/api/admin/transfers/$PL_ID/download"
+cmp "$FIX/sub/big.bin" "$WORK/pulled-big.bin" || fail "pulled file differs from source"
+pass "file pulled from client and downloaded intact (300KB binary)"
+
 say "Cancel a running backup"
 CANCEL_FIX="$WORK/cancel-fixture"
 mkdir -p "$CANCEL_FIX"

@@ -75,6 +75,10 @@ type Server struct {
 	// agent replies that answer them.
 	docker dockerDiscovery
 
+	// browse correlates in-flight directory-listing requests (the file
+	// browser) with the agent replies that answer them.
+	browse browseRequests
+
 	web *webUI
 }
 
@@ -145,6 +149,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("POST /api/agent/snapshots", s.agentAuth(s.handleSnapshotCommit))
 	mux.HandleFunc("GET /api/agent/manifests/{id}", s.agentAuth(s.handleManifestGet))
 	mux.HandleFunc("GET /api/agent/transfers/{id}/content", s.agentAuth(s.handleTransferContent))
+	mux.HandleFunc("PUT /api/agent/transfers/{id}/content", s.agentAuth(s.handleTransferUpload))
 
 	// Admin API (session cookie).
 	s.registerAdminAPI(mux)

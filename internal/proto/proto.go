@@ -36,6 +36,9 @@ const (
 	MsgTransferProgress = "transfer_progress"
 	MsgTransferDone     = "transfer_done"
 
+	// agent -> server (file browser)
+	MsgDirListing = "dir_listing"
+
 	// server -> agent
 	MsgJobsUpdate     = "jobs_update"
 	MsgRunBackup      = "run_backup"
@@ -43,9 +46,19 @@ const (
 	MsgCancelRun      = "cancel_run"
 	MsgDiscoverDocker = "discover_docker"
 
-	// server -> agent (file push)
+	// server -> agent (file push/pull)
 	MsgPushFile       = "push_file"
+	MsgPullFile       = "pull_file"
 	MsgCancelTransfer = "cancel_transfer"
+
+	// server -> agent (file browser)
+	MsgBrowseDir = "browse_dir"
+)
+
+// Transfer directions.
+const (
+	DirectionPush = "push" // server -> client
+	DirectionPull = "pull" // client -> server
 )
 
 // Run modes.
@@ -245,6 +258,41 @@ type PushFile struct {
 	Size      int64  `json:"size"`
 	Mode      uint32 `json:"mode,omitempty"` // unix perms; ignored on Windows
 	Overwrite bool   `json:"overwrite"`
+}
+
+// PullFile instructs the agent to read one file off the client's disk and
+// upload it to the server, where the operator can then download it. Like a
+// push, it runs in the agent's background service and is observed only from
+// the server. The payload travels over the authenticated HTTPS data plane.
+type PullFile struct {
+	TransferID string `json:"transfer_id"`
+	SourcePath string `json:"source_path"` // absolute path of the file to fetch off the client
+}
+
+// BrowseDir asks the agent to list one directory on the client so the server
+// GUI can show a file browser. An empty Path means "the filesystem roots"
+// (drive letters on Windows, "/" elsewhere).
+type BrowseDir struct {
+	RequestID string `json:"request_id"`
+	Path      string `json:"path"`
+}
+
+// DirEntry is one item in a browsed directory.
+type DirEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"` // full path, so the GUI can navigate without re-joining
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size,omitempty"`
+	Mtime int64  `json:"mtime,omitempty"` // unix seconds
+}
+
+// DirListing is the agent's answer to BrowseDir.
+type DirListing struct {
+	RequestID string     `json:"request_id"`
+	Path      string     `json:"path"`   // the (cleaned, absolute) path listed
+	Parent    string     `json:"parent"` // parent path for an "up" control ("" at a root)
+	Entries   []DirEntry `json:"entries,omitempty"`
+	Error     string     `json:"error,omitempty"`
 }
 
 // TransferProgress is streamed while a pushed file is being written.
