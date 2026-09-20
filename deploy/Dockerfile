@@ -10,6 +10,7 @@ ARG VERSION=dev
 RUN set -e; \
     LDFLAGS="-s -w -X centralbackup/internal/agent.Version=${VERSION}"; \
     CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o /out/backup-server ./cmd/server; \
+    CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o /out/oauth-forwarder ./cmd/oauth-forwarder; \
     CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-linux-amd64 ./cmd/agent; \
     CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-linux-arm64 ./cmd/agent; \
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-amd64.exe ./cmd/agent; \
@@ -37,6 +38,16 @@ ENV CB_DATA_DIR=/data \
 VOLUME /data
 EXPOSE 8443
 ENTRYPOINT ["/app/backup-server"]
+
+# ---- central storage-OAuth callback (multi-tenant deployments only) ----
+# One redirect URI shared by every tenant; routes the provider's callback to
+# the tenant named in the OAuth state. See docs/central-oauth-callback.md.
+FROM alpine:3.21 AS oauth-forwarder
+RUN apk add --no-cache ca-certificates tzdata
+COPY --from=build /out/oauth-forwarder /app/oauth-forwarder
+ENV CB_LISTEN=:8080
+EXPOSE 8080
+ENTRYPOINT ["/app/oauth-forwarder"]
 
 # ---- containerized agent image (for Docker hosts) ----
 FROM alpine:3.21 AS agent

@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"centralbackup/internal/oauthstate"
 	"centralbackup/internal/server/storage"
 )
 
@@ -237,7 +238,7 @@ func (s *Server) handleStorageConnect(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	state := newOAuthState()
+	state := oauthstate.Encode(s.cfg.TenantSlug, newOAuthState())
 	s.oauth.mu.Lock()
 	s.oauth.state = state
 	s.oauth.pending = cfg
@@ -354,11 +355,21 @@ func (s *Server) fetchAccountLabel(ctx context.Context, cfg storage.Config, acce
 	return ""
 }
 
-// oauthRedirectURLFromRequest is the callback URL to register with the
-// provider. Consent happens in the operator's browser, so this is the
-// browser-facing origin — CB_GUI_URL when the GUI is proxied, else
-// CB_PUBLIC_URL, else the request's own host.
+// oauthRedirectURLFromRequest is the redirect URI sent to the provider.
+//
+// It must be identical on the authorization request and on the token
+// exchange, or the provider rejects the exchange (Microsoft answers with a
+// bare invalid_grant), so both paths call this.
+//
+// With CB_OAUTH_CALLBACK_URL set this is the shared central callback, which
+// forwards the browser back here using the tenant slug in the state. Without
+// it, it is this server's own callback on the browser-facing origin —
+// CB_GUI_URL when the GUI is proxied, else CB_PUBLIC_URL, else the request's
+// own host.
 func (s *Server) oauthRedirectURLFromRequest(r *http.Request, _ storage.Provider) string {
+	if s.cfg.OAuthCallbackURL != "" {
+		return s.cfg.OAuthCallbackURL
+	}
 	return s.browserBaseURL(r) + oauthCallbackPath
 }
 

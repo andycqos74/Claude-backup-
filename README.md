@@ -179,6 +179,7 @@ clients) are stored once.
 | Path | What |
 |---|---|
 | `cmd/server`, `cmd/agent` | binaries |
+| `cmd/oauth-forwarder` | shared storage-OAuth callback (multi-tenant) |
 | `internal/server` | GUI, API, hub, scheduler, retention/GC |
 | `internal/server/store` | SQLite metadata |
 | `internal/server/storage` | storage backends (localfs) |

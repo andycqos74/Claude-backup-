@@ -171,3 +171,39 @@ func (s *Server) staticPublicBaseURL() string {
 	}
 	return "https://" + host + portSuffix(s.cfg.Listen)
 }
+
+// normalizeOAuthCallbackURL validates CB_OAUTH_CALLBACK_URL — the single
+// redirect URI registered with the storage provider and shared by every
+// tenant. Empty means "use this server's own callback", the single-tenant
+// behaviour.
+//
+// Unlike the origin settings above this one carries a path, because it is
+// registered verbatim in the provider's console and must match byte for
+// byte on both the authorization request and the token exchange.
+func normalizeOAuthCallbackURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("CB_OAUTH_CALLBACK_URL is not a valid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("CB_OAUTH_CALLBACK_URL must use https (got %q): "+
+			"providers reject plain-HTTP redirect URIs", raw)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("CB_OAUTH_CALLBACK_URL has no host: %q", raw)
+	}
+	if u.Path == "" || u.Path == "/" {
+		return "", fmt.Errorf("CB_OAUTH_CALLBACK_URL needs the callback path too "+
+			"(e.g. https://connect.example.com/oauth/callback), got %q", raw)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("CB_OAUTH_CALLBACK_URL must not carry a query or fragment: %q", raw)
+	}
+	// Rebuild rather than echo, so the registered value and the one sent to
+	// the provider cannot differ by a trailing slash or stray escaping.
+	return u.Scheme + "://" + u.Host + u.EscapedPath(), nil
+}

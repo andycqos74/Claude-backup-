@@ -1,5 +1,10 @@
 # Backup storage backends
 
+> **Multi-tenant deployments:** a shared, centrally-registered OAuth callback
+> lets customers connect OneDrive without creating their own app
+> registration, and avoids the provider's cap on redirect URIs per
+> application. See [central-oauth-callback.md](central-oauth-callback.md).
+
 By default the server stores all backup data (content-addressed blobs and
 snapshot manifests) on its own local disk — the `/data` volume in Docker,
 or `CB_DATA_DIR` for a systemd install. You can instead point it at cloud

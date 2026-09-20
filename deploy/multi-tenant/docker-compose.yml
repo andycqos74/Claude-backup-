@@ -32,6 +32,11 @@ services:
       # The hostname the operator's browser uses, via the tunnel.
       CB_GUI_LISTEN: ":8080"
       CB_GUI_URL: https://acme.gui.example.com
+      # Shared storage-OAuth callback: one redirect URI registered with the
+      # provider for all tenants. CB_TENANT_SLUG identifies this tenant in
+      # the OAuth state so oauth-forwarder can route the callback back here.
+      CB_OAUTH_CALLBACK_URL: https://connect.example.com/oauth/callback
+      CB_TENANT_SLUG: acme
     volumes:
       - acme-data:/data
 
@@ -45,6 +50,8 @@ services:
       CB_PUBLIC_URL: https://globex.backup.example.com:8443
       CB_GUI_LISTEN: ":8080"
       CB_GUI_URL: https://globex.gui.example.com
+      CB_OAUTH_CALLBACK_URL: https://connect.example.com/oauth/callback
+      CB_TENANT_SLUG: globex
     volumes:
       - globex-data:/data
 
@@ -63,10 +70,27 @@ services:
       - acme-server
       - globex-server
 
+  # ---- central storage-OAuth callback -------------------------------------
+  # The single redirect URI registered with Microsoft/Google, shared by every
+  # tenant. Providers cap redirect URIs per application (Microsoft: 100 for
+  # apps allowing personal accounts), so one per tenant subdomain would cap
+  # tenant count. This forwards each callback to the tenant named in the
+  # OAuth state. See docs/central-oauth-callback.md.
+  oauth-forwarder:
+    image: ghcr.io/${CB_OWNER}/centralbackup-oauth-forwarder:${CB_TAG}
+    container_name: oauth-forwarder
+    restart: unless-stopped
+    environment:
+      CB_TENANT_TEMPLATE: "https://{slug}.gui.example.com"
+      # Recommended: only these slugs are forwarded. Without it, any
+      # syntactically valid slug is (still within the template's domain).
+      CB_TENANT_ALLOWLIST: "acme,globex"
+
   # ---- GUI plane: Cloudflare Tunnel --------------------------------------
   # In the dashboard, add one public hostname per tenant:
   #   acme.gui.example.com    → HTTP → acme-server:8080
   #   globex.gui.example.com  → HTTP → globex-server:8080
+  #   connect.example.com     → HTTP → oauth-forwarder:8080
   # HTTP and 8080, never 8443 — see docs/cloudflared.md.
   cloudflared:
     image: cloudflare/cloudflared:latest

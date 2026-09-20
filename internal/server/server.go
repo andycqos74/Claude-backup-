@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"centralbackup/internal/oauthstate"
 	"centralbackup/internal/server/storage"
 	"centralbackup/internal/server/store"
 )
@@ -28,9 +29,18 @@ type Config struct {
 	ServerName string // comma-separated extra SANs for the generated cert
 	PublicURL  string // externally reachable origin for agents, e.g. https://backup.example.com:8443
 	GUIURL     string // browser-facing origin of the GUI when proxied, e.g. https://backup.example.com
-	CertFile   string // optional externally provided cert
-	KeyFile    string
-	AgentBins  string // directory of prebuilt agent binaries served at /dl/
+
+	// OAuthCallbackURL is a central storage-OAuth redirect URI shared by
+	// every tenant (e.g. https://connect.example.com/oauth/callback), used
+	// instead of this server's own callback. TenantSlug identifies this
+	// tenant inside the OAuth state so the forwarder can route the browser
+	// back here. See docs/central-oauth-callback.md.
+	OAuthCallbackURL string
+	TenantSlug       string
+
+	CertFile  string // optional externally provided cert
+	KeyFile   string
+	AgentBins string // directory of prebuilt agent binaries served at /dl/
 }
 
 func ConfigFromEnv() Config {
@@ -49,9 +59,13 @@ func ConfigFromEnv() Config {
 		ServerName: get("CB_SERVER_NAME", ""),
 		PublicURL:  get("CB_PUBLIC_URL", ""),
 		GUIURL:     get("CB_GUI_URL", ""),
-		CertFile:   get("CB_TLS_CERT", ""),
-		KeyFile:    get("CB_TLS_KEY", ""),
-		AgentBins:  get("CB_AGENT_BIN_DIR", "./agents"),
+
+		OAuthCallbackURL: get("CB_OAUTH_CALLBACK_URL", ""),
+		TenantSlug:       get("CB_TENANT_SLUG", ""),
+
+		CertFile:  get("CB_TLS_CERT", ""),
+		KeyFile:   get("CB_TLS_KEY", ""),
+		AgentBins: get("CB_AGENT_BIN_DIR", "./agents"),
 	}
 }
 
@@ -108,6 +122,23 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	cfg.GUIURL = guiURL
+
+	callbackURL, err := normalizeOAuthCallbackURL(cfg.OAuthCallbackURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.OAuthCallbackURL = callbackURL
+	cfg.TenantSlug = strings.TrimSpace(cfg.TenantSlug)
+	if cfg.TenantSlug != "" && !oauthstate.ValidSlug(cfg.TenantSlug) {
+		return nil, fmt.Errorf("CB_TENANT_SLUG %q is not a valid slug: lower-case letters, "+
+			"digits and inner hyphens only (it becomes part of a hostname)", cfg.TenantSlug)
+	}
+	if cfg.OAuthCallbackURL != "" && cfg.TenantSlug == "" {
+		// Without a slug the forwarder cannot tell which tenant a callback
+		// belongs to, and would have to guess. Fail instead.
+		return nil, fmt.Errorf("CB_OAUTH_CALLBACK_URL is set, so CB_TENANT_SLUG is required: " +
+			"it identifies this tenant in the OAuth state so the callback can be routed back here")
+	}
 
 	if cfg.GUIListen != "" {
 		if _, _, err := net.SplitHostPort(cfg.GUIListen); err != nil {

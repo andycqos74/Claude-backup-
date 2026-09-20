@@ -306,13 +306,13 @@ subdomain, that is a ceiling of 100 tenants on consumer OneDrive.
 
 Microsoft's own recommendation for this case is the `state` parameter: one
 registered redirect URI on a central hostname, with `state` carrying which
-tenant to return to. That fits here with a small, stateless addition —
-register `https://connect.example.com/oauth/callback` once, and have it
-validate the tenant slug out of `state` against the tenant registry and
-302 the browser on to that tenant's own callback with `code` and `state`
-intact. The tenant container then performs the token exchange exactly as it
-does now, unchanged. The slug **must** be validated against the registry, or
-the forwarder is an open redirect carrying an authorization code.
+tenant to return to.
+
+**This is now implemented** — `cmd/oauth-forwarder` plus `CB_OAUTH_CALLBACK_URL`
+and `CB_TENANT_SLUG` on each tenant server. See
+[central-oauth-callback.md](central-oauth-callback.md). It removes both
+problems at once: no customer-side app registration, and no ceiling on
+tenant count.
 
 **2. Turning off local storage needs a code change.** `initStorage` treats
 local disk as both the default and the fallback: if a configured cloud

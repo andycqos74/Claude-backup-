@@ -11,6 +11,8 @@
 | `CB_SERVER_NAME` | – | extra SANs for the generated TLS certificate |
 | `CB_PUBLIC_URL` | – | the **direct** origin agents connect to (e.g. `https://backup.example.com:8443`); pins the address used in enrollment commands, downloaded installers and — unless `CB_GUI_URL` is set — the OAuth redirect URL |
 | `CB_GUI_URL` | – | the origin the operator's **browser** uses when the GUI is proxied (e.g. `https://gui.example.com`); used for the storage OAuth redirect URL. https only: the session cookie is `Secure` |
+| `CB_OAUTH_CALLBACK_URL` | – | multi-tenant only: the single storage-OAuth redirect URI shared by all tenants (e.g. `https://connect.example.com/oauth/callback`). Requires `CB_TENANT_SLUG`. See [central-oauth-callback.md](central-oauth-callback.md) |
+| `CB_TENANT_SLUG` | – | multi-tenant only: this tenant's slug, carried in the OAuth state so the shared callback can be routed back here. Hostname-safe characters only |
 | `CB_TLS_CERT` / `CB_TLS_KEY` | – | bring your own certificate |
 | `CB_AGENT_BIN_DIR` | `/app/agents` | prebuilt agent binaries served at `/dl/` |
 

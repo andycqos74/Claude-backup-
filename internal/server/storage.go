@@ -139,7 +139,13 @@ func (s *Server) applyStorageConfig(cfg storage.Config) error {
 // oauthRedirectURL is where providers send the user back after consent.
 // This request-free form is used by background token refresh; the
 // request-scoped handlers use oauthRedirectURLFromRequest.
+//
+// Refreshing a token replays the redirect URI, so this must agree with what
+// was used at consent time — hence the same CB_OAUTH_CALLBACK_URL priority.
 func (s *Server) oauthRedirectURL() string {
+	if s.cfg.OAuthCallbackURL != "" {
+		return s.cfg.OAuthCallbackURL
+	}
 	return s.browserBaseURL(nil) + oauthCallbackPath
 }
 
