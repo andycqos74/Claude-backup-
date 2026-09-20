@@ -202,6 +202,8 @@ host (volumes, bind mounts, database dumps),
 [docs/storage.md](docs/storage.md) for cloud storage backends,
 [docs/cloudflared.md](docs/cloudflared.md) for putting the GUI behind
 Cloudflare Tunnel,
+[docs/multi-tenant-design.md](docs/multi-tenant-design.md) for the (proposed)
+multi-tenant architecture,
 [docs/security.md](docs/security.md) for the security model,
 [docs/operations.md](docs/operations.md) for day-2 operations and
 [docs/roadmap.md](docs/roadmap.md) for planned work (Box, off-site mirror,

@@ -64,3 +64,8 @@ Planned enhancements, roughly in priority order.
    frequently-modified files (VM images, mailbox files) so only changed
    chunks upload; the current file-level model stays for everything else.
 10. **Multi-admin / roles** and audit log.
+11. **Multi-tenancy** — one single-tenant server container per tenant, behind
+    a control plane handling routing, sign-on and provisioning. Design
+    (including why the server itself should *not* become tenant-aware, and an
+    assessment of Temporal for the job layer) in
+    [multi-tenant-design.md](multi-tenant-design.md).
