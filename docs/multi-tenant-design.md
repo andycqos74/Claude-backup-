@@ -13,6 +13,15 @@ not make the backup server itself tenant-aware. Do not adopt Temporal for
 backup runs; it is a good fit for *provisioning* if that grows, and a poor
 fit for the data plane.
 
+**Who the tenants are** (answered): customers of a managed service *and*
+customers who buy the product and run it themselves. That means the software
+ships in **two shapes from one image** — a self-hosted single-tenant install,
+and a managed fleet of those same installs. §2 was chosen partly on other
+grounds, but this settles it: tenancy machinery must not become something a
+self-hosting customer has to carry, and no tenant-facing feature may depend
+on Cloudflare, since a self-hosted customer has no tunnel. Everything
+multi-tenant therefore lives *outside* the server binary.
+
 ---
 
 ## 1. Where the code stands today
@@ -439,10 +448,10 @@ the cron loop for control-plane work only, and the agent protocol untouched.
 
 ## 9. Phased plan
 
-**Phase 1 — two tenants by hand.** No control plane. Two compose stacks,
-`nginx stream` in front of 8443, wildcard tunnel hostname, Access policy.
-Proves SNI routing, per-tenant OAuth redirects and the operational shape
-before any code is written.
+**Phase 1 — two tenants by hand. ✅ prototyped.** No control plane.
+`deploy/multi-tenant/` holds a two-tenant compose stack and the nginx SNI
+router config; `scripts/e2e-multi-tenant.sh` proves the mechanism end to end
+against real binaries (see §11).
 
 **Phase 2 — the small server changes.** `/healthz`, trusted-IdP auth, the two
 durability fixes, IP rejection under SNI routing. Each is independently
@@ -457,11 +466,66 @@ control plane.
 
 ---
 
-## 10. Open questions
+## 10. Phase 1 prototype (implemented)
 
-- **Who are the tenants?** Customers of a managed service, or business units
-  you run? It decides whether Cloudflare in the session path is acceptable,
-  and whether tenant admins may be handed the direct 8443 GUI as break-glass.
+`deploy/multi-tenant/docker-compose.yml` — two tenant containers, an nginx
+`agent-router` publishing the only port, and cloudflared for the GUI plane.
+`deploy/multi-tenant/nginx-sni.conf` — the router, with a fail-closed map.
+
+`scripts/e2e-multi-tenant.sh` runs the whole thing against real binaries: two
+`backup-server` processes with genuinely different certificates, a real nginx
+with `ngx_stream_ssl_preread_module`, a real `backup-agent`, and a real
+backup. It uses `*.localtest.me` (public DNS pointing at 127.0.0.1), so it
+needs no `/etc/hosts` edit and no root.
+
+```
+=== 1. The router hands each tenant its OWN certificate
+  ok: SNI routing selects the right backend, certificate unmodified
+=== 2. Enrolling an agent for acme, THROUGH the router
+  ok: enrollment command points at the router, not the backend
+  ok: agent enrolled through the router with the pin enforced
+=== 3. A real backup over the routed connection
+  ok: agent online in acme: fe3821444afe0cd9adc1
+  ok: backup completed over the SNI-routed connection
+=== 4. Tenant isolation
+  ok: globex sees no agents and no snapshots of acme's
+=== 5. The router cannot be used to cross tenants
+  ok: crossing tenants fails the pin: fingerprint mismatch: got 15c5c9ff…
+=== 6. No SNI (IP literal) is refused, not misrouted
+  ok: connection without SNI refused by the router
+```
+
+What this establishes:
+
+- **Pinning survives the hop.** `ssl_preread` selects a backend from the
+  ClientHello and splices the TCP stream; the certificate the agent verifies
+  is its own tenant's, byte for byte. This was the one assumption the whole
+  model rests on.
+- **The router is not a tenant-crossing tool.** Replaying tenant A's
+  credentials against tenant B's hostname — same router, same port — fails
+  the pin, because the pin is per tenant.
+- **Fail-closed works.** A connection with no SNI (what an IP-enrolled agent
+  sends) is refused rather than routed to a default backend.
+- **Enrollment addresses stay correct.** Tokens minted through the GUI carry
+  `https://<tenant-host>:<router-port>`, so installers point at the router.
+
+Not covered by the prototype, and still to be proven: the Cloudflare tunnel
+and Access policy (needs a real domain), per-tenant OAuth storage redirects,
+and `nginx -s reload` under live agent connections when a tenant is added.
+
+## 11. Open questions
+
+- ~~**Who are the tenants?**~~ **Answered:** managed-service customers, plus
+  customers who self-host the same product. Consequences are recorded at the
+  top of this document. Two follow-ons remain:
+  - Cloudflare terminates TLS for managed-tenant admin sessions. That is a
+    disclosure obligation to those customers (privacy policy / DPA), not just
+    an architecture note. Backup data never crosses it; GUI-initiated restore
+    downloads do.
+  - Self-hosted customers must keep a first-class no-Cloudflare path. The
+    trusted-IdP feature in §5 must therefore be generic OIDC-shaped rather
+    than Cloudflare-specific, even if Access is the only initially supported
+    issuer.
 - **Does a tenant admin ever need two tenants at once?** If not, SSO is a
   convenience; if yes, the portal page in Phase 3 becomes the main UI.
 - **Per-tenant storage backends** — is each tenant expected to bring their own

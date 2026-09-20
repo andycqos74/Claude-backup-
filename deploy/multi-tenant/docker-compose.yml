@@ -1,0 +1,89 @@
+# Phase 1 of the multi-tenant design: two tenants, by hand.
+# See docs/multi-tenant-design.md. This is a prototype to prove the shape
+# before any control plane exists — tenants are added by editing this file.
+#
+#   CB_OWNER=<github-owner> CB_TAG=<image-tag> \
+#   CB_TUNNEL_TOKEN=<token> docker compose -f deploy/multi-tenant/docker-compose.yml up -d
+#
+# Two planes, deliberately separate:
+#
+#   browser ─https─▶ Cloudflare ─tunnel─▶ cloudflared ─http─▶ <tenant>:8080
+#   agents  ─https, certificate pinned──▶ :8443 agent-router (no termination)
+#
+# Adding a tenant means: a service block, a volume, a line in nginx-sni.conf,
+# a public hostname in the Cloudflare dashboard, and a DNS record for the
+# agent hostname pointing at this host.
+
+services:
+
+  # ---- tenant: acme -------------------------------------------------------
+  acme-server:
+    image: ghcr.io/${CB_OWNER}/centralbackup-server:${CB_TAG}
+    container_name: acme-server
+    restart: unless-stopped
+    # NOTE: no `ports:`. Agents arrive via agent-router, the GUI via
+    # cloudflared. Publishing 8443 here would bypass the router.
+    environment:
+      # The hostname agents use. Must be a DNS name, never a bare IP:
+      # Go omits SNI for IP literals, so an IP-enrolled agent is unroutable
+      # and the router will (correctly) refuse it.
+      CB_SERVER_NAME: acme.backup.example.com
+      CB_PUBLIC_URL: https://acme.backup.example.com:8443
+      # The hostname the operator's browser uses, via the tunnel.
+      CB_GUI_LISTEN: ":8080"
+      CB_GUI_URL: https://acme.gui.example.com
+    volumes:
+      - acme-data:/data
+
+  # ---- tenant: globex -----------------------------------------------------
+  globex-server:
+    image: ghcr.io/${CB_OWNER}/centralbackup-server:${CB_TAG}
+    container_name: globex-server
+    restart: unless-stopped
+    environment:
+      CB_SERVER_NAME: globex.backup.example.com
+      CB_PUBLIC_URL: https://globex.backup.example.com:8443
+      CB_GUI_LISTEN: ":8080"
+      CB_GUI_URL: https://globex.gui.example.com
+    volumes:
+      - globex-data:/data
+
+  # ---- agent plane: SNI router -------------------------------------------
+  # The only published port. Routes by ClientHello SNI without decrypting,
+  # so each tenant's certificate reaches its own agents intact.
+  agent-router:
+    image: nginx:1.27-alpine
+    container_name: agent-router
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./nginx-sni.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - acme-server
+      - globex-server
+
+  # ---- GUI plane: Cloudflare Tunnel --------------------------------------
+  # In the dashboard, add one public hostname per tenant:
+  #   acme.gui.example.com    → HTTP → acme-server:8080
+  #   globex.gui.example.com  → HTTP → globex-server:8080
+  # HTTP and 8080, never 8443 — see docs/cloudflared.md.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: tenant-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CB_TUNNEL_TOKEN:?set CB_TUNNEL_TOKEN}
+    depends_on:
+      - acme-server
+      - globex-server
+
+volumes:
+  # Per-tenant volumes, named explicitly. A tenant that comes up on an empty
+  # volume gets a NEW certificate and therefore a new fingerprint, which
+  # breaks every agent already enrolled against it.
+  acme-data:
+    name: cb-acme-data
+  globex-data:
+    name: cb-globex-data

@@ -185,6 +185,7 @@ clients) are stored once.
 | `internal/agent` | connection, backup/restore engine, agent.yaml sync |
 | `internal/proto` | shared protocol types |
 | `deploy/` | Dockerfiles, compose files, cloudflared config |
+| `deploy/multi-tenant/` | two-tenant prototype: SNI router + compose (proposal) |
 | `scripts/` | release build |
 | `docs/` | security model, operations, roadmap |
 
