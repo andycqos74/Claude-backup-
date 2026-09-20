@@ -57,12 +57,36 @@ a tunnel cannot expose enrollment or blob storage. `CB_GUI_URL` keeps the
 browser-facing origin (and the OAuth redirect) separate from the agent
 address. See [cloudflared.md](cloudflared.md).
 
-**Gap for many tenants:** a single cloudflared wildcard ingress rule can
-only forward to *one* origin — wildcards match many hostnames, they do not
-fan out. So either one ingress rule per tenant (a provisioning step per
-tenant), or one wildcard rule pointing at an internal reverse proxy that
-fans out by `Host`. The second is better: adding a tenant then needs no
-Cloudflare change at all.
+**Routing many tenants through one tunnel works fine.** A single cloudflared
+instance evaluates an ordered list of ingress rules and forwards each
+hostname to a different origin, so one tunnel serves every tenant:
+
+```yaml
+ingress:
+  - hostname: acme.gui.example.com
+    service: http://acme-server:8080
+  - hostname: globex.gui.example.com
+    service: http://globex-server:8080
+  - service: http_status:404          # required catch-all
+```
+
+The only thing a *wildcard* rule changes is where the per-tenant line lives.
+`*.gui.example.com` matches every subdomain but forwards them all to one
+origin — wildcards match broadly, they do not fan out — so a wildcard only
+helps if something behind it fans out by `Host`.
+
+Both shapes are viable and the choice is about where per-tenant config
+lives, not about capability:
+
+| Shape | Adding a tenant | Components |
+|---|---|---|
+| One tunnel, explicit rule per tenant | one ingress rule (config reload or dashboard/API call) | cloudflared only |
+| Wildcard rule → internal proxy | nothing, if the proxy self-discovers | cloudflared + Traefik/nginx |
+
+Explicit rules are the simpler default: the provisioner is already creating a
+container, a volume and a DNS record, so adding an ingress rule is one more
+idempotent step in a sequence it already owns. Reach for the wildcard shape
+only if you want tenant stacks to be entirely self-describing.
 
 ### 2. Tenant per Docker stack — prototyped
 
@@ -260,6 +284,46 @@ the same agent with a different build target; it will be an opportunistic
 sync of a user-selected scope. Worth not painting the protocol into a corner
 that assumes a persistent control channel.
 
+### Per-tenant storage backends — supported, with two constraints
+
+Storage configuration is per container (provider, folder, OAuth client
+credentials and refresh token all live in that tenant's own `settings`
+table), so "each tenant connects their own OneDrive / S3 / local folder"
+needs no work. Two things do need decisions.
+
+**1. Who owns the OAuth app registration?** Today the admin pastes their own
+client ID and secret (`internal/server/storage/config.go`), so each tenant
+brings their own Azure or Google application. That has no scaling ceiling,
+but it is a poor fit for "registration as simple as possible" — asking a
+customer to create an Azure app registration is the least simple step in the
+whole product.
+
+The alternative, an operator-owned application that every tenant connects to
+with one click, hits a hard limit: **Microsoft allows at most 100 redirect
+URIs for apps supporting personal accounts and 250 for work accounts, and
+the limit cannot be raised.** Since each tenant's callback lives on its own
+subdomain, that is a ceiling of 100 tenants on consumer OneDrive.
+
+Microsoft's own recommendation for this case is the `state` parameter: one
+registered redirect URI on a central hostname, with `state` carrying which
+tenant to return to. That fits here with a small, stateless addition —
+register `https://connect.example.com/oauth/callback` once, and have it
+validate the tenant slug out of `state` against the tenant registry and
+302 the browser on to that tenant's own callback with `code` and `state`
+intact. The tenant container then performs the token exchange exactly as it
+does now, unchanged. The slug **must** be validated against the registry, or
+the forwarder is an open redirect carrying an authorization code.
+
+**2. Turning off local storage needs a code change.** `initStorage` treats
+local disk as both the default and the fallback: if a configured cloud
+backend fails to open, it logs and silently switches to local
+(`internal/server/storage.go`). In a hosted model that is the wrong
+behaviour — a tenant whose OneDrive token is revoked would quietly start
+filling the container's volume instead of failing loudly. Disabling local
+storage properly means a mode where an unavailable backend is a hard error:
+refuse to accept blobs, mark the tenant degraded, and surface it, rather than
+falling back.
+
 ---
 
 ## 5. Pros and cons of the model as specified
@@ -313,17 +377,15 @@ that assumes a persistent control channel.
 | **Traefik + Let's Encrypt (DNS-01)** | nothing | 443 | Each stack declares its hostname with Docker labels; Traefik picks it up automatically |
 | **Caddy + DNS-01 wildcard** | a config line | 443 | Simplest to reason about; no third party |
 
-**Traefik deserves serious consideration for this model specifically.**
-"Multiple tenants on different Docker stacks" is exactly the shape Traefik's
-label-based discovery is built for: a new stack advertises its own hostname
-and is routed without touching any central config. Combined with a wildcard
-certificate it makes tenant addition genuinely zero-touch at the routing
-layer.
+**cloudflared alone is enough**, and is the recommended starting point: one
+tunnel, one ingress rule per tenant, added by the provisioner alongside the
+container and DNS record it is already creating.
 
-The reason to still prefer cloudflared is **Access** — identity in front of
-the login page, free, without running an IdP. The strongest combination is
-arguably both: cloudflared for the public edge and Access, with a wildcard
-ingress into Traefik for fan-out.
+Traefik earns its place only if you want tenant stacks to be entirely
+self-describing — a new stack carries its own routing labels and needs no
+central change at all. That is a real benefit at high tenant churn, and the
+cost is a second component plus Traefik's access to the Docker socket.
+It is an optimisation to reach for later, not a starting requirement.
 
 ### For the agent plane
 
