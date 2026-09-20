@@ -79,6 +79,23 @@ Docker network, and the GUI listener is plain HTTP on purpose. (Pointing it
 at `https://backup-server:8443` also "works" only with TLS verification
 disabled, and would expose the agent API through the tunnel — don't.)
 
+## Portainer
+
+Portainer can't use compose overlays, so paste
+`deploy/portainer-stack-cloudflared.yml` in its place: it is the normal
+Portainer stack with the `cloudflared` connector and the two GUI settings
+already filled in. **Stacks → your stack → Editor**, replace the contents,
+set `CB_GUI_URL` and `CB_TUNNEL_TOKEN` under *Environment variables*
+alongside the ones you already have, and **Update the stack** with
+*Re-pull image* enabled.
+
+Check `docker volume ls | grep backup` first and make the two `name:`
+fields match your existing volumes — the file ships with the
+`deploy_`-prefixed defaults.
+
+Then add the public hostname in the Cloudflare dashboard exactly as in the
+Docker section above (`HTTP` → `backup-server:8080`).
+
 ## systemd (no Docker)
 
 Install the server with the GUI listener on loopback:

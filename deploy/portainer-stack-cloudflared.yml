@@ -1,0 +1,86 @@
+# Central Backup — Portainer stack with the GUI behind a Cloudflare Tunnel.
+#
+# Same as portainer-stack.yml, plus a cloudflared connector serving the web
+# GUI over Cloudflare's certificate. Paste this into Portainer → Stacks →
+# Add stack → Web editor (or Update the stack) and set the environment
+# variables below.
+#
+# Required environment variables:
+#   CB_TAG           image tag to deploy, e.g. "main" or a branch name
+#   CB_OWNER         GitHub owner the images were published under
+#   CB_SERVER_NAME   DNS name in the TLS certificate agents pin, e.g. backup.example.com
+#   CB_PUBLIC_URL    the DIRECT address agents connect to, e.g. https://backup.example.com:8443
+#   CB_GUI_URL       the tunnel address your browser uses, e.g. https://gui.example.com
+#   CB_TUNNEL_TOKEN  tunnel token from Zero Trust → Networks → Tunnels → Install connector
+#
+# CB_PUBLIC_URL and CB_GUI_URL are different hostnames, on purpose:
+#
+#   browser ──https──▶ Cloudflare ──tunnel──▶ cloudflared ──http──▶ :8080  GUI only
+#   agents  ─────────https, cert pinned, direct──────────────────▶ :8443  everything
+#
+# Agents pin this server's certificate fingerprint and Cloudflare replaces
+# it with its own, so agent traffic must keep reaching 8443 directly. Port
+# 8443 stays published; the GUI listener on 8080 is NOT published, so only
+# cloudflared can reach it. Full runbook: docs/cloudflared.md.
+#
+# IMPORTANT — the volumes below are declared `external` on purpose. Compose
+# normally prefixes volume names with the stack name, so deploying this as a
+# differently named stack would silently create *empty* volumes and the
+# server would come up with no database, no certificate (a new fingerprint
+# breaks every enrolled agent) and no backups. Naming the existing volumes
+# explicitly makes the stack name irrelevant. Check yours first with
+# `docker volume ls | grep backup` and adjust the two `name:` fields if they
+# differ.
+
+services:
+  backup-server:
+    image: ghcr.io/${CB_OWNER}/centralbackup-server:${CB_TAG}
+    container_name: backup-server
+    restart: unless-stopped
+    ports:
+      # Agents only. Keep this published and reachable.
+      - "8443:8443"
+    environment:
+      CB_SERVER_NAME: ${CB_SERVER_NAME}
+      CB_PUBLIC_URL: ${CB_PUBLIC_URL}
+      # GUI-only plain-HTTP listener for cloudflared, on the stack's
+      # internal network. Do not add it to `ports:` — it has no TLS of its
+      # own, and it is reachable from the internet through the tunnel.
+      CB_GUI_LISTEN: ":8080"
+      CB_GUI_URL: ${CB_GUI_URL}
+    volumes:
+      - backup-data:/data
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: backup-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CB_TUNNEL_TOKEN}
+    depends_on:
+      - backup-server
+
+  backup-agent:
+    image: ghcr.io/${CB_OWNER}/centralbackup-agent:${CB_TAG}
+    container_name: backup-agent
+    restart: unless-stopped
+    environment:
+      # Only read on first enrollment; harmless to leave empty once the
+      # agent has credentials in its volume.
+      CB_SERVER: ${CB_SERVER:-}
+      CB_TOKEN: ${CB_TOKEN:-}
+      CB_FINGERPRINT: ${CB_FINGERPRINT:-}
+      CB_NAME: ${CB_NAME:-}
+    volumes:
+      - backup-agent-data:/var/lib/backup-agent
+      - /:/host:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  backup-data:
+    external: true
+    name: deploy_backup-data
+  backup-agent-data:
+    external: true
+    name: deploy_backup-agent-data
