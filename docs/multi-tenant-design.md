@@ -13,14 +13,20 @@ not make the backup server itself tenant-aware. Do not adopt Temporal for
 backup runs; it is a good fit for *provisioning* if that grows, and a poor
 fit for the data plane.
 
-**Who the tenants are** (answered): customers of a managed service *and*
-customers who buy the product and run it themselves. That means the software
-ships in **two shapes from one image** — a self-hosted single-tenant install,
-and a managed fleet of those same installs. §2 was chosen partly on other
-grounds, but this settles it: tenancy machinery must not become something a
-self-hosting customer has to carry, and no tenant-facing feature may depend
-on Cloudflare, since a self-hosted customer has no tunnel. Everything
-multi-tenant therefore lives *outside* the server binary.
+**Who the tenants are** (answered, then revised): managed-service customers
+only — **there will be no customer self-hosted installs**. Everything runs in
+the operator's infrastructure.
+
+That removes the "no Cloudflare dependency" constraint recorded in an earlier
+revision of this document, and with it the requirement that trusted-IdP
+support be generic OIDC before it is useful. Depending on Cloudflare Access
+is now a straightforward operator choice.
+
+It does *not* change the Model B decision in §2, which rests on isolation and
+on not rewriting the server — both of which stand on their own.
+
+The concrete target model, and how far the code is from it, is in
+[saas-model-gap-analysis.md](saas-model-gap-analysis.md).
 
 ---
 
@@ -406,12 +412,22 @@ message to a machine that is usually offline*, which the existing queue-plus-
 catch-up already handles, and which Temporal cannot improve because the
 constraint is the agent's availability, not the orchestrator's memory.
 
-**The operational cost is large for this product.** A Temporal deployment is
-a server, a database (Cassandra/MySQL/Postgres), and a UI — or Temporal Cloud
-and a per-action bill. The current selling point is "one container, one port,
-a single static binary". Adding a cluster per deployment, or a hard dependency
-on a SaaS, changes what the product *is*. For a self-hosted backup tool sold
-on its simplicity, that is the dominant argument.
+**The operational cost is real, though weaker than first argued.** A Temporal
+deployment is a server, a database (Cassandra/MySQL/Postgres), and a UI — or
+Temporal Cloud and a per-action bill.
+
+An earlier revision of this document leaned on "the product is one container,
+one port, a single static binary, and a cluster changes what it *is*". With
+no customer self-hosted installs, that argument mostly falls away: the
+cluster would be operator infrastructure that no customer ever sees, and
+operators absorb dependencies that products cannot. What survives is the
+ordinary version — it is a substantial new system to run, monitor and upgrade
+for a fleet that a cron loop and a SQLite table are currently serving
+adequately.
+
+The verdict does not change, because it never rested on this argument. The
+two that carry it are that the worker cannot join the cluster, and that the
+server-side workflow is a single message send.
 
 **And the durability gaps it would fix are thirty lines** (§7).
 
@@ -515,17 +531,11 @@ and `nginx -s reload` under live agent connections when a tenant is added.
 
 ## 11. Open questions
 
-- ~~**Who are the tenants?**~~ **Answered:** managed-service customers, plus
-  customers who self-host the same product. Consequences are recorded at the
-  top of this document. Two follow-ons remain:
-  - Cloudflare terminates TLS for managed-tenant admin sessions. That is a
-    disclosure obligation to those customers (privacy policy / DPA), not just
-    an architecture note. Backup data never crosses it; GUI-initiated restore
-    downloads do.
-  - Self-hosted customers must keep a first-class no-Cloudflare path. The
-    trusted-IdP feature in §5 must therefore be generic OIDC-shaped rather
-    than Cloudflare-specific, even if Access is the only initially supported
-    issuer.
+- ~~**Who are the tenants?**~~ **Answered:** managed-service customers only;
+  no self-hosted installs. One follow-on remains: Cloudflare terminates TLS
+  for tenant admin sessions, which is a disclosure obligation (privacy
+  policy / DPA). Backup data never crosses it; GUI-initiated restore
+  downloads do.
 - **Does a tenant admin ever need two tenants at once?** If not, SSO is a
   convenience; if yes, the portal page in Phase 3 becomes the main UI.
 - **Per-tenant storage backends** — is each tenant expected to bring their own

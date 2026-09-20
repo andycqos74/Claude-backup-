@@ -205,6 +205,8 @@ host (volumes, bind mounts, database dumps),
 Cloudflare Tunnel,
 [docs/multi-tenant-design.md](docs/multi-tenant-design.md) for the (proposed)
 multi-tenant architecture,
+[docs/saas-model-gap-analysis.md](docs/saas-model-gap-analysis.md) for how far
+the code is from the target SaaS model,
 [docs/security.md](docs/security.md) for the security model,
 [docs/operations.md](docs/operations.md) for day-2 operations and
 [docs/roadmap.md](docs/roadmap.md) for planned work (Box, off-site mirror,
