@@ -75,6 +75,10 @@ type Server struct {
 	// agent replies that answer them.
 	docker dockerDiscovery
 
+	// sched correlates scheduled-task list/action requests with their
+	// agent replies.
+	sched schedTasks
+
 	web *webUI
 }
 

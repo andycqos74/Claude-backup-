@@ -62,6 +62,8 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/admin/agents/{id}", s.adminAuth(s.handleAgentDelete))
 	mux.HandleFunc("POST /api/admin/tokens", s.adminAuth(s.handleTokenCreate))
 	mux.HandleFunc("GET /api/admin/agents/{id}/docker", s.adminAuth(s.handleAgentDocker))
+	mux.HandleFunc("GET /api/admin/agents/{id}/sched-tasks", s.adminAuth(s.handleSchedList))
+	mux.HandleFunc("POST /api/admin/agents/{id}/sched-tasks/action", s.adminAuth(s.handleSchedAction))
 	mux.HandleFunc("GET /api/admin/installer", s.adminAuth(s.handleInstaller))
 	mux.HandleFunc("GET /api/admin/jobs", s.adminAuth(s.handleJobsList))
 	mux.HandleFunc("POST /api/admin/jobs", s.adminAuth(s.handleJobSave))
@@ -251,6 +253,46 @@ func (s *Server) handleAgentDocker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, inv)
+}
+
+// ---- scheduled tasks ----
+
+// handleSchedList returns a Windows client's scheduled tasks. Non-Windows
+// clients answer available:false, which the GUI renders as "not supported"
+// rather than an error.
+func (s *Server) handleSchedList(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	inv, err := s.listSchedTasks(ctx, r.PathValue("id"))
+	if err != nil {
+		httpError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, inv)
+}
+
+// handleSchedAction performs one locked-down operation on an existing
+// scheduled task: run, enable, disable, or change its schedule. It can
+// never create, delete, or alter what a task runs.
+func (s *Server) handleSchedAction(w http.ResponseWriter, r *http.Request) {
+	req, err := decodeBody[proto.SchedAction](r)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		httpError(w, http.StatusBadRequest, "task name is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+	defer cancel()
+	if err := s.doSchedAction(ctx, r.PathValue("id"), req); err != nil {
+		httpError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	log.Printf("sched-task %q %q%q on agent %s by %s",
+		req.Action, req.Path, req.Name, r.PathValue("id"), s.sessionUser(r).Username)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // ---- jobs ----

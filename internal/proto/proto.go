@@ -31,6 +31,8 @@ const (
 	MsgRunLog          = "run_log"
 	MsgRunDone         = "run_done"
 	MsgDockerInventory = "docker_inventory"
+	MsgSchedInventory  = "sched_inventory"
+	MsgSchedResult     = "sched_result"
 
 	// server -> agent
 	MsgJobsUpdate     = "jobs_update"
@@ -38,6 +40,32 @@ const (
 	MsgRestore        = "restore"
 	MsgCancelRun      = "cancel_run"
 	MsgDiscoverDocker = "discover_docker"
+	MsgListSched      = "list_sched"
+	MsgSchedAction    = "sched_action"
+)
+
+// Scheduled-task actions the server may ask an agent to perform. The set is
+// deliberately small: an operator can list tasks, run them on demand, turn
+// them on and off, and change *when* an existing task runs — but never what
+// a task does. The agent enforces this by only ever touching a task's
+// triggers, never its actions/program, so a compromised or malicious server
+// cannot repoint a task at a new payload. See SchedActionSetSchedule.
+const (
+	SchedActionRun         = "run"
+	SchedActionEnable      = "enable"
+	SchedActionDisable     = "disable"
+	SchedActionSetSchedule = "set_schedule"
+)
+
+// Schedule kinds accepted by SchedActionSetSchedule.
+const (
+	SchedKindOnce    = "once"    // one-shot at At (RFC3339 or "YYYY-MM-DDTHH:MM")
+	SchedKindMinutes = "minutes" // every Interval minutes, starting At time-of-day
+	SchedKindHourly  = "hourly"  // every Interval hours, starting At time-of-day
+	SchedKindDaily   = "daily"   // every Interval days at At time-of-day
+	SchedKindWeekly  = "weekly"  // every Interval weeks on DaysOfWeek at At time-of-day
+	SchedKindOnStart = "onstart" // at system startup
+	SchedKindOnLogon = "onlogon" // at user logon
 )
 
 // Run modes.
@@ -259,4 +287,69 @@ type BlobCheckResponse struct {
 // SnapshotCommitResponse is returned when a manifest is committed.
 type SnapshotCommitResponse struct {
 	SnapshotID string `json:"snapshot_id"`
+}
+
+// ---- Scheduled-task management (Windows Task Scheduler) ----
+//
+// Like Docker discovery, this is a request/response pair over the otherwise
+// fire-and-forget control channel, correlated by RequestID. It lets the
+// server GUI view a client's scheduled tasks and perform a locked-down set
+// of operations on them without any visual remote access.
+
+// ListSched asks an agent to enumerate its scheduled tasks.
+type ListSched struct {
+	RequestID string `json:"request_id"`
+}
+
+// SchedTask is one scheduled task as shown in the GUI. Actions and Triggers
+// are human-readable summaries for display only — the server never sends an
+// action definition back, so a task's program cannot be changed remotely.
+type SchedTask struct {
+	Name        string   `json:"name"`
+	Path        string   `json:"path"` // task folder, e.g. "\" or "\Microsoft\Windows\..."
+	State       string   `json:"state"`
+	Enabled     bool     `json:"enabled"`
+	Description string   `json:"description,omitempty"`
+	Author      string   `json:"author,omitempty"`
+	Actions     []string `json:"actions,omitempty"`  // display only: "program args"
+	Triggers    []string `json:"triggers,omitempty"` // display only: existing schedule summary
+	LastRun     string   `json:"last_run,omitempty"`
+	NextRun     string   `json:"next_run,omitempty"`
+	LastResult  int64    `json:"last_result"`
+}
+
+// SchedInventory is the agent's answer to ListSched.
+type SchedInventory struct {
+	RequestID string      `json:"request_id"`
+	Available bool        `json:"available"` // false = not Windows / Task Scheduler unreachable
+	Error     string      `json:"error,omitempty"`
+	Tasks     []SchedTask `json:"tasks,omitempty"`
+}
+
+// ScheduleSpec describes a new schedule for an existing task. It carries no
+// action/program information by design: SetSchedule rewrites only the
+// task's triggers.
+type ScheduleSpec struct {
+	Kind       string   `json:"kind"`
+	At         string   `json:"at,omitempty"`           // "HH:MM" for recurring; RFC3339 / "YYYY-MM-DDTHH:MM" for once
+	Interval   int      `json:"interval,omitempty"`     // N for minutes/hourly/daily/weekly (>=1)
+	DaysOfWeek []string `json:"days_of_week,omitempty"` // weekly: Sun..Sat (full or 3-letter)
+}
+
+// SchedAction instructs an agent to act on one existing scheduled task.
+// Only the actions in the SchedAction* constants are honoured, and
+// Schedule is consulted only for SchedActionSetSchedule.
+type SchedAction struct {
+	RequestID string        `json:"request_id"`
+	Action    string        `json:"action"`
+	Path      string        `json:"path"`
+	Name      string        `json:"name"`
+	Schedule  *ScheduleSpec `json:"schedule,omitempty"`
+}
+
+// SchedResult is the agent's answer to a SchedAction.
+type SchedResult struct {
+	RequestID string `json:"request_id"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
 }

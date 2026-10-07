@@ -226,6 +226,22 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 		// Read-only and quick, but it must not block the socket read loop.
 		go a.handleDiscoverDocker(cmd)
 
+	case proto.MsgListSched:
+		cmd, err := unmarshalMsg[proto.ListSched](env.Data)
+		if err != nil {
+			log.Printf("bad list_sched message: %v", err)
+			return
+		}
+		go a.handleListSched(cmd)
+
+	case proto.MsgSchedAction:
+		cmd, err := unmarshalMsg[proto.SchedAction](env.Data)
+		if err != nil {
+			log.Printf("bad sched_action message: %v", err)
+			return
+		}
+		go a.handleSchedAction(cmd)
+
 	default:
 		log.Printf("unknown message type %q", env.Type)
 	}

@@ -178,6 +178,22 @@ func (s *Server) handleAgentMessage(agentID string, env proto.Envelope) error {
 		s.docker.deliver(inv)
 		return nil
 
+	case proto.MsgSchedInventory:
+		inv, err := unmarshal[proto.SchedInventory](env.Data)
+		if err != nil {
+			return err
+		}
+		s.sched.deliverInv(inv)
+		return nil
+
+	case proto.MsgSchedResult:
+		res, err := unmarshal[proto.SchedResult](env.Data)
+		if err != nil {
+			return err
+		}
+		s.sched.deliverRes(res)
+		return nil
+
 	default:
 		log.Printf("agent %s: unknown message type %q", agentID, env.Type)
 		return nil

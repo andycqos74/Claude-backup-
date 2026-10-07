@@ -42,6 +42,31 @@ re-enrolling agents.
   equivalent to granting root on that host; that is inherent to running
   `docker exec` pre-hooks, not new to container discovery.
 
+## Scheduled-task management (Windows clients)
+
+The server can view a Windows client's scheduled tasks and perform a
+deliberately narrow set of operations on them: **run on demand, enable,
+disable, and change a task's schedule**. The operation set is a fixed
+vocabulary — there is no "run arbitrary command" and no way to create or
+delete a task.
+
+- **Actions are locked.** Changing a schedule only rewrites the task's
+  *triggers* (`Set-ScheduledTask -Trigger`); the agent never accepts or
+  applies an action/program definition, so the server cannot repoint a task
+  at a new payload. This is enforced in the agent, not just the GUI.
+- **No injection surface.** The schedule is a structured spec (kind,
+  interval, time-of-day, days-of-week). The agent validates every field to
+  be numeric or an enumerated constant and emits times as numeric
+  `Get-Date` arguments; task name/path are passed as PowerShell
+  single-quoted literals with embedded quotes doubled. Nothing
+  caller-supplied is interpolated into a script unescaped.
+- **Still privileged.** Enabling a task, or scheduling an existing task to
+  run more often, still causes code to run on the client as the agent's
+  (typically SYSTEM) context. Every action is written to the server log
+  with the task and the admin who triggered it. Treat this like any other
+  remote-management capability: see the single-admin limitation below, for
+  which per-admin roles and a full audit log are planned.
+
 ## Admin authentication
 
 - Username/password (bcrypt), session cookie (`HttpOnly`, `Secure`,
