@@ -2,7 +2,7 @@ name: Build and publish images
 
 # Builds the server and agent images and pushes them to GHCR, so hosts can
 # deploy by pulling instead of compiling. The Docker build compiles the Go
-# server plus three cross-compiled agent binaries, which is enough to
+# server plus four cross-compiled agent binaries, which is enough to
 # exhaust a small VPS — doing it here keeps that load off the deployment
 # host entirely.
 

@@ -348,7 +348,13 @@ func (a *Agent) checkAllBlobs(ctx context.Context, hashes []string) ([]string, e
 	var missing []string
 	const batch = 1000
 	for i := 0; i < len(hashes); i += batch {
-		end := min(i+batch, len(hashes))
+		// Not the min() builtin: the agent must stay buildable with Go 1.20,
+		// the last toolchain that targets Windows 7 / POSReady 7 (see
+		// scripts/build-legacy-agent.sh).
+		end := i + batch
+		if end > len(hashes) {
+			end = len(hashes)
+		}
 		m, err := a.client.checkBlobs(ctx, hashes[i:end])
 		if err != nil {
 			return nil, err

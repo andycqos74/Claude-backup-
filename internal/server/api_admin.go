@@ -64,6 +64,19 @@ func (s *Server) registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/agents/{id}/docker", s.adminAuth(s.handleAgentDocker))
 	mux.HandleFunc("GET /api/admin/agents/{id}/sched-tasks", s.adminAuth(s.handleSchedList))
 	mux.HandleFunc("POST /api/admin/agents/{id}/sched-tasks/action", s.adminAuth(s.handleSchedAction))
+	mux.HandleFunc("GET /api/admin/agents/{id}/browse", s.adminAuth(s.handleAgentBrowse))
+	mux.HandleFunc("POST /api/admin/agents/{id}/transfers", s.adminAuth(s.handleTransferCreate))
+	mux.HandleFunc("POST /api/admin/agents/{id}/pull", s.adminAuth(s.handleTransferPull))
+	mux.HandleFunc("GET /api/admin/transfers", s.adminAuth(s.handleTransfersList))
+	mux.HandleFunc("GET /api/admin/transfers/{id}", s.adminAuth(s.handleTransferGet))
+	mux.HandleFunc("GET /api/admin/transfers/{id}/download", s.adminAuth(s.handleTransferDownload))
+	mux.HandleFunc("POST /api/admin/transfers/{id}/cancel", s.adminAuth(s.handleTransferCancel))
+	mux.HandleFunc("DELETE /api/admin/transfers/{id}", s.adminAuth(s.handleTransferDelete))
+	mux.HandleFunc("POST /api/admin/agents/{id}/commands", s.adminAuth(s.handleCommandRun))
+	mux.HandleFunc("GET /api/admin/commands", s.adminAuth(s.handleCommandsList))
+	mux.HandleFunc("GET /api/admin/commands/{id}", s.adminAuth(s.handleCommandGet))
+	mux.HandleFunc("POST /api/admin/commands/{id}/cancel", s.adminAuth(s.handleCommandCancel))
+	mux.HandleFunc("DELETE /api/admin/commands/{id}", s.adminAuth(s.handleCommandDelete))
 	mux.HandleFunc("GET /api/admin/installer", s.adminAuth(s.handleInstaller))
 	mux.HandleFunc("GET /api/admin/jobs", s.adminAuth(s.handleJobsList))
 	mux.HandleFunc("POST /api/admin/jobs", s.adminAuth(s.handleJobSave))
@@ -214,6 +227,12 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 		if err := s.deleteSnapshot(sn.ID); err != nil {
 			httpError(w, http.StatusInternalServerError, "snapshot delete failed")
 			return
+		}
+	}
+	// Drop any parked file-push payloads for this client from the backend.
+	if keys, err := s.store.TransferKeysForAgent(id); err == nil {
+		for _, k := range keys {
+			s.backend().Delete(k)
 		}
 	}
 	if err := s.store.DeleteAgent(id); err != nil {

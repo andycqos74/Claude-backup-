@@ -33,6 +33,15 @@ type Agent struct {
 	currentRunID string
 	cancelRun    context.CancelFunc
 
+	// File pushes run independently of backup/restore (they neither wait on
+	// a.runs nor block it), so each has its own cancel registered here.
+	xferMu sync.Mutex
+	xfers  map[string]context.CancelFunc
+
+	// Remote commands likewise run independently and concurrently.
+	cmdMu sync.Mutex
+	cmds  map[string]context.CancelFunc
+
 	cfg *localConfig // agent.yaml state (see config.go)
 }
 
@@ -70,6 +79,8 @@ func New(stateDir, configPath string) (*Agent, error) {
 		configPath: configPath,
 		creds:      creds,
 		client:     newServerClient(creds),
+		xfers:      map[string]context.CancelFunc{},
+		cmds:       map[string]context.CancelFunc{},
 	}
 	a.cfg = newLocalConfig(a)
 	return a, nil
@@ -214,6 +225,66 @@ func (a *Agent) handleMessage(env proto.Envelope) {
 		a.runMu.Unlock()
 		if match {
 			log.Printf("[run %s] cancellation requested", cancel.RunID)
+			cancelFn()
+		}
+
+	case proto.MsgPushFile:
+		cmd, err := unmarshalMsg[proto.PushFile](env.Data)
+		if err != nil {
+			log.Printf("bad push_file message: %v", err)
+			return
+		}
+		go a.runPushFile(cmd)
+
+	case proto.MsgPullFile:
+		cmd, err := unmarshalMsg[proto.PullFile](env.Data)
+		if err != nil {
+			log.Printf("bad pull_file message: %v", err)
+			return
+		}
+		go a.runPullFile(cmd)
+
+	case proto.MsgBrowseDir:
+		cmd, err := unmarshalMsg[proto.BrowseDir](env.Data)
+		if err != nil {
+			log.Printf("bad browse_dir message: %v", err)
+			return
+		}
+		go a.handleBrowseDir(cmd)
+
+	case proto.MsgRunCommand:
+		cmd, err := unmarshalMsg[proto.RunCommand](env.Data)
+		if err != nil {
+			log.Printf("bad run_command message: %v", err)
+			return
+		}
+		go a.runCommand(cmd)
+
+	case proto.MsgCancelCommand:
+		cancel, err := unmarshalMsg[proto.CancelCommand](env.Data)
+		if err != nil {
+			log.Printf("bad cancel_command message: %v", err)
+			return
+		}
+		a.cmdMu.Lock()
+		cancelFn := a.cmds[cancel.CommandID]
+		a.cmdMu.Unlock()
+		if cancelFn != nil {
+			log.Printf("[command %s] cancellation requested", cancel.CommandID)
+			cancelFn()
+		}
+
+	case proto.MsgCancelTransfer:
+		cancel, err := unmarshalMsg[proto.CancelTransfer](env.Data)
+		if err != nil {
+			log.Printf("bad cancel_transfer message: %v", err)
+			return
+		}
+		a.xferMu.Lock()
+		cancelFn := a.xfers[cancel.TransferID]
+		a.xferMu.Unlock()
+		if cancelFn != nil {
+			log.Printf("[transfer %s] cancellation requested", cancel.TransferID)
 			cancelFn()
 		}
 

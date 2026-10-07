@@ -130,11 +130,73 @@ CREATE TABLE IF NOT EXISTS blobs (
 	size_stored INTEGER NOT NULL,
 	created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS transfers (
+	id TEXT PRIMARY KEY,
+	agent_id TEXT NOT NULL,
+	direction TEXT NOT NULL DEFAULT 'push',
+	filename TEXT NOT NULL,
+	dest_path TEXT NOT NULL DEFAULT '',
+	source_path TEXT NOT NULL DEFAULT '',
+	size INTEGER NOT NULL DEFAULT 0,
+	hash TEXT NOT NULL DEFAULT '',
+	object_key TEXT NOT NULL DEFAULT '',
+	mode INTEGER NOT NULL DEFAULT 0,
+	overwrite INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	written_path TEXT NOT NULL DEFAULT '',
+	bytes_done INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	started_at INTEGER NOT NULL DEFAULT 0,
+	finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_transfers_agent ON transfers(agent_id, created_at);
+CREATE TABLE IF NOT EXISTS commands (
+	id TEXT PRIMARY KEY,
+	agent_id TEXT NOT NULL,
+	shell TEXT NOT NULL,
+	command TEXT NOT NULL,
+	status TEXT NOT NULL,
+	exit_code INTEGER NOT NULL DEFAULT 0,
+	error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	started_at INTEGER NOT NULL DEFAULT 0,
+	finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_commands_agent ON commands(agent_id, created_at);
+CREATE TABLE IF NOT EXISTS command_output (
+	seq INTEGER PRIMARY KEY AUTOINCREMENT,
+	command_id TEXT NOT NULL,
+	ts INTEGER NOT NULL,
+	stream TEXT NOT NULL,
+	line TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_command_output ON command_output(command_id, seq);
 `)
 	if err != nil {
 		return err
 	}
-	return s.migrateBackendScoping()
+	if err := s.migrateBackendScoping(); err != nil {
+		return err
+	}
+	return s.migrateTransferDirection()
+}
+
+// migrateTransferDirection adds the pull direction to a transfers table
+// created before pulls existed (the first cut only supported server->client
+// pushes). Existing rows are pushes.
+func (s *Store) migrateTransferDirection() error {
+	if !s.columnExists("transfers", "direction") {
+		if _, err := s.db.Exec(`ALTER TABLE transfers ADD COLUMN direction TEXT NOT NULL DEFAULT 'push'`); err != nil {
+			return err
+		}
+	}
+	if !s.columnExists("transfers", "source_path") {
+		if _, err := s.db.Exec(`ALTER TABLE transfers ADD COLUMN source_path TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateBackendScoping adds a `backend` dimension to the blobs and
@@ -419,6 +481,9 @@ func (s *Store) DeleteAgent(id string) error {
 		`DELETE FROM run_logs WHERE run_id IN (SELECT id FROM runs WHERE agent_id = ?)`,
 		`DELETE FROM runs WHERE agent_id = ?`,
 		`DELETE FROM jobs WHERE agent_id = ?`,
+		`DELETE FROM transfers WHERE agent_id = ?`,
+		`DELETE FROM command_output WHERE command_id IN (SELECT id FROM commands WHERE agent_id = ?)`,
+		`DELETE FROM commands WHERE agent_id = ?`,
 		`DELETE FROM agents WHERE id = ?`,
 	} {
 		if _, err := s.db.Exec(q, id); err != nil {

@@ -170,6 +170,90 @@ cmp "$FIX/sub/big.bin" "$RESTORED_ROOT/sub/big.bin" || fail "big.bin corrupt aft
 [ "$(readlink "$RESTORED_ROOT/link")" = "a.txt" ] || fail "symlink not restored"
 pass "restore matches source (incl. 300KB binary + symlink)"
 
+say "Push a file to the client (background transfer)"
+PUSH_SRC="$WORK/push-src.txt"
+head -c 200000 /dev/urandom | base64 > "$PUSH_SRC"
+PUSH_DEST="$WORK/pushed/hello.txt"
+TR=$(curl -ksS -b "$JAR" -H 'X-Requested-With: fetch' \
+    -F "file=@$PUSH_SRC;filename=hello.txt" -F "dest_path=$PUSH_DEST" -F overwrite=1 \
+    "$BASE/api/admin/agents/$AGENT_ID/transfers")
+TR_ID=$(echo "$TR" | jq -r .transfer_id)
+[ -n "$TR_ID" ] && [ "$TR_ID" != null ] || fail "transfer create: $TR"
+transfer_status() { capi GET "/api/admin/transfers/$1" | jq -r .Status; }
+transfer_finished() { [[ "$(transfer_status "$1")" =~ ^(success|error|cancelled)$ ]]; }
+wait_for 30 "file push to finish" transfer_finished "$TR_ID"
+[ "$(transfer_status "$TR_ID")" = success ] || { cat "$WORK/agent.log"; fail "push status: $(capi GET /api/admin/transfers/$TR_ID)"; }
+cmp "$PUSH_SRC" "$PUSH_DEST" || fail "pushed file content differs"
+pass "file pushed to client in background and matches source"
+
+say "Push into a directory + overwrite guard"
+mkdir -p "$WORK/dropdir"
+TR2=$(curl -ksS -b "$JAR" -H 'X-Requested-With: fetch' \
+    -F "file=@$PUSH_SRC;filename=dropped.txt" -F "dest_path=$WORK/dropdir/" \
+    "$BASE/api/admin/agents/$AGENT_ID/transfers")
+TR2_ID=$(echo "$TR2" | jq -r .transfer_id)
+wait_for 30 "dir push to finish" transfer_finished "$TR2_ID"
+[ "$(transfer_status "$TR2_ID")" = success ] || fail "dir push failed"
+[ -f "$WORK/dropdir/dropped.txt" ] || fail "file not dropped into directory under its own name"
+# A second push to the same path without overwrite must fail rather than clobber.
+TR3=$(curl -ksS -b "$JAR" -H 'X-Requested-With: fetch' \
+    -F "file=@$PUSH_SRC;filename=dropped.txt" -F "dest_path=$WORK/dropdir/dropped.txt" \
+    "$BASE/api/admin/agents/$AGENT_ID/transfers")
+TR3_ID=$(echo "$TR3" | jq -r .transfer_id)
+wait_for 30 "overwrite-guard push to finish" transfer_finished "$TR3_ID"
+[ "$(transfer_status "$TR3_ID")" = error ] || fail "expected error when overwriting without permission"
+pass "directory drop works; overwrite guard blocks clobbering"
+
+say "Browse the client's filesystem"
+BROWSE=$(capi GET "/api/admin/agents/$AGENT_ID/browse?path=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$FIX")")
+echo "$BROWSE" | jq -e --arg p "$FIX/a.txt" '.entries[] | select(.path==$p and .is_dir==false)' >/dev/null \
+    || fail "browse did not list a.txt: $BROWSE"
+echo "$BROWSE" | jq -e '.entries[] | select(.name=="sub" and .is_dir==true)' >/dev/null \
+    || fail "browse did not list sub/ as a directory"
+pass "remote directory listing works"
+
+say "Pull a file from the client to the server"
+PL=$(capi POST "/api/admin/agents/$AGENT_ID/pull" "{\"source_path\":\"$FIX/sub/big.bin\"}")
+PL_ID=$(echo "$PL" | jq -r .transfer_id)
+[ -n "$PL_ID" ] && [ "$PL_ID" != null ] || fail "pull create: $PL"
+wait_for 30 "pull to finish" transfer_finished "$PL_ID"
+[ "$(transfer_status "$PL_ID")" = success ] || { cat "$WORK/agent.log"; fail "pull status: $(capi GET /api/admin/transfers/$PL_ID)"; }
+curl -ksS -b "$JAR" -o "$WORK/pulled-big.bin" "$BASE/api/admin/transfers/$PL_ID/download"
+cmp "$FIX/sub/big.bin" "$WORK/pulled-big.bin" || fail "pulled file differs from source"
+pass "file pulled from client and downloaded intact (300KB binary)"
+
+say "Run a remote command on the client"
+command_status() { capi GET "/api/admin/commands/$1?since=0" | jq -r .command.Status; }
+command_finished() { [[ "$(command_status "$1")" =~ ^(success|error|cancelled)$ ]]; }
+CMD=$(capi POST "/api/admin/agents/$AGENT_ID/commands" '{"command":"echo hello-from-client; echo oops 1>&2"}' | jq -r .command_id)
+[ -n "$CMD" ] && [ "$CMD" != null ] || fail "command create"
+wait_for 20 "command to finish" command_finished "$CMD"
+CRES=$(capi GET "/api/admin/commands/$CMD?since=0")
+echo "$CRES" | jq -e '.command.Status=="success" and .command.ExitCode==0' >/dev/null || fail "command status: $CRES"
+echo "$CRES" | jq -e '[.output[]|select(.stream=="stdout" and .line=="hello-from-client")]|length==1' >/dev/null || fail "stdout not captured: $CRES"
+echo "$CRES" | jq -e '[.output[]|select(.stream=="stderr" and .line=="oops")]|length==1' >/dev/null || fail "stderr not captured: $CRES"
+pass "command ran; stdout and stderr streamed back"
+
+say "Non-zero exit is reported"
+CMD2=$(capi POST "/api/admin/agents/$AGENT_ID/commands" '{"command":"exit 5"}' | jq -r .command_id)
+wait_for 20 "command to finish" command_finished "$CMD2"
+capi GET "/api/admin/commands/$CMD2?since=0" | jq -e '.command.Status=="error" and .command.ExitCode==5' >/dev/null \
+    || fail "non-zero exit not reported: $(capi GET /api/admin/commands/$CMD2?since=0)"
+pass "exit code 5 surfaced as an error"
+
+say "Cancel a running command"
+CMD3=$(capi POST "/api/admin/agents/$AGENT_ID/commands" '{"command":"sleep 30"}' | jq -r .command_id)
+for i in $(seq 1 200); do
+    st=$(command_status "$CMD3")
+    [ "$st" = running ] && break
+    [[ "$st" =~ ^(success|error|cancelled)$ ]] && break
+    sleep 0.05
+done
+capi POST "/api/admin/commands/$CMD3/cancel" | jq -e .ok >/dev/null || fail "cancel request failed"
+wait_for 20 "command to cancel" command_finished "$CMD3"
+[ "$(command_status "$CMD3")" = cancelled ] || fail "expected cancelled, got $(command_status "$CMD3")"
+pass "running command cancelled (process tree killed)"
+
 say "Cancel a running backup"
 CANCEL_FIX="$WORK/cancel-fixture"
 mkdir -p "$CANCEL_FIX"

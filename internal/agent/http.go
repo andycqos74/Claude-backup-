@@ -131,6 +131,27 @@ func (c *serverClient) getBlob(ctx context.Context, hash string) (io.ReadCloser,
 	return res.Body, nil
 }
 
+// getTransferContent returns the zstd-compressed payload of a pushed file
+// (caller closes).
+func (c *serverClient) getTransferContent(ctx context.Context, transferID string) (io.ReadCloser, error) {
+	res, err := c.do(ctx, "GET", "/api/agent/transfers/"+transferID+"/content", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	return res.Body, nil
+}
+
+// putTransferContent uploads a pulled file's zstd-compressed content to the
+// server for a client->server transfer.
+func (c *serverClient) putTransferContent(ctx context.Context, transferID string, compressed io.Reader) error {
+	res, err := c.do(ctx, "PUT", "/api/agent/transfers/"+transferID+"/content", compressed, "application/zstd")
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	return nil
+}
+
 // getManifest returns the zstd-compressed manifest stream (caller closes).
 func (c *serverClient) getManifest(ctx context.Context, snapshotID string) (io.ReadCloser, error) {
 	res, err := c.do(ctx, "GET", "/api/agent/manifests/"+snapshotID, nil, "")

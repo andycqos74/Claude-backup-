@@ -12,7 +12,16 @@ RUN set -e; \
     CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o /out/backup-server ./cmd/server; \
     CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-linux-amd64 ./cmd/agent; \
     CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-linux-arm64 ./cmd/agent; \
-    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-amd64.exe ./cmd/agent
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-amd64.exe ./cmd/agent; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=386   go build -ldflags "$LDFLAGS" -o /out/agents/backup-agent-windows-386.exe ./cmd/agent
+
+# Legacy 32-bit agent for Windows 7 SP1 / Embedded POSReady 7 (NT 6.1), which
+# the standard Go 1.25 binaries cannot run on. It is built out-of-band with
+# the Go 1.20 toolchain (scripts/build-legacy-agent.sh) and committed under
+# deploy/prebuilt, so the image build just copies it in — no toolchain
+# download at image-build time, which is unreliable in many CI/build
+# environments. Regenerate and re-commit it when the agent code changes.
+COPY deploy/prebuilt/backup-agent-windows-386-legacy.exe /out/agents/backup-agent-windows-386-legacy.exe
 
 # ---- central server image ----
 FROM alpine:3.21 AS server

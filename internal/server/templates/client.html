@@ -18,6 +18,83 @@
   <tbody></tbody>
 </table>
 
+<div class="page-head">
+  <h2>File transfer</h2>
+  <button class="btn primary" onclick="openBrowser('')" id="browse-btn">🗂 Browse client files</button>
+  <button class="btn" onclick="el('send-dlg').showModal()">Send a file</button>
+</div>
+<p class="muted">Push a file to the client or pull one from it. Transfers run
+  in the background on the client — nothing appears on its screen — and are
+  observed only here. Offline clients receive queued pushes/pulls on
+  reconnect.</p>
+<table class="tbl" id="transfers-tbl">
+  <thead><tr><th>Status</th><th></th><th>File</th><th>Path</th><th>Size</th><th>Progress</th><th>When</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<dialog id="send-dlg" class="dlg">
+  <h2>Send a file to this client</h2>
+  <form id="send-form">
+    <label>File
+      <input type="file" id="send-file" required>
+    </label>
+    <label>Destination path on the client
+      <input type="text" id="send-dest" placeholder="e.g. C:\ProgramData\app\config.yaml or /etc/app/" required>
+    </label>
+    <p class="muted">End the path with <code>\</code> or <code>/</code> (or give an
+      existing folder) to drop the file in that folder under its own name;
+      otherwise the path is the full target filename.</p>
+    <label class="check">
+      <input type="checkbox" id="send-overwrite"> Overwrite if it already exists
+    </label>
+    <div class="row" style="margin-top:1rem">
+      <button class="btn primary" type="submit">Send</button>
+      <button class="btn" type="button" onclick="el('send-dlg').close()">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="browse-dlg" class="dlg wide">
+  <div class="page-head">
+    <h2 style="margin:0">Client files</h2>
+    <span class="spacer"></span>
+    <button class="btn" type="button" onclick="el('browse-dlg').close()">Close</button>
+  </div>
+  <div class="row" style="align-items:center;gap:.5rem;margin:.4rem 0">
+    <button class="btn sm" id="browse-up" onclick="browseUp()">⬆ Up</button>
+    <code id="browse-path" class="crumb"></code>
+    <span class="spacer"></span>
+    <label class="btn sm" style="margin:0;cursor:pointer">Push file here
+      <input type="file" id="browse-push" hidden onchange="pushHere()">
+    </label>
+  </div>
+  <p id="browse-err" class="muted" hidden></p>
+  <table class="tbl" id="browse-tbl">
+    <thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</dialog>
+
+<div class="page-head">
+  <h2>Run a command</h2>
+  <span class="spacer"></span>
+  <select id="cmd-shell"></select>
+</div>
+<p class="muted">Runs on the client in the background as the agent service
+  account (<b>LocalSystem</b> on Windows, <b>root</b> under systemd). Output is
+  shown here only. <span id="cmd-offline" class="muted" hidden>Client is
+  offline — commands can't be run right now.</span></p>
+<form id="cmd-form" class="cmd-bar">
+  <input type="text" id="cmd-input" placeholder="e.g. Get-Service, ipconfig /all, systemctl status" autocomplete="off">
+  <button class="btn primary" type="submit" id="cmd-run">Run</button>
+  <button class="btn danger" type="button" id="cmd-cancel" onclick="cancelCommand()" hidden>Cancel</button>
+</form>
+<pre id="cmd-output" class="code log" hidden></pre>
+<table class="tbl" id="cmds-tbl">
+  <thead><tr><th>Status</th><th>Shell</th><th>Command</th><th>Exit</th><th>When</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
 <h2>Snapshots</h2>
 <table class="tbl" id="snaps-tbl">
   <thead><tr><th>Created</th><th>Job</th><th>Mode</th><th>Files</th><th>Size</th><th></th></tr></thead>
@@ -94,6 +171,13 @@ async function load() {
   if (!a) { toast('client not found'); return; }
   el('agent-name').textContent = a.Name;
   el('agent-status').innerHTML = statusDot(a.online ? 'online' : 'offline') + (a.online ? ' online' : ' offline');
+  // Browsing needs a live connection; pushes can still be queued offline.
+  el('browse-btn').disabled = !a.online;
+  el('browse-btn').title = a.online ? '' : 'Client is offline';
+  setShellOptions(a.OS);
+  el('cmd-offline').hidden = a.online;
+  el('cmd-input').disabled = !a.online;
+  if (!cmdTimer) el('cmd-run').disabled = !a.online;
   el('agent-meta').textContent =
     `${a.Hostname} · ${a.OS}/${a.Arch} · agent ${a.Version || '?'} · last seen ${fmtTime(a.LastSeen)} · id ${a.ID}`;
 
@@ -115,6 +199,41 @@ async function load() {
     `<a class="btn sm" href="/snapshots/${s.ID}">Browse / restore</a>
      <button class="btn sm danger" onclick="delSnap('${s.ID}')">Delete</button>`,
   ]), 'No snapshots yet.');
+
+  const transfers = await api('GET', '/api/admin/transfers?agent=' + agentID);
+  fillRows('transfers-tbl', transfers.map(t => {
+    const pull = t.Direction === 'pull';
+    const actions = [];
+    if (t.Status === 'running' || t.Status === 'queued') {
+      actions.push(`<button class="btn sm danger" onclick="cancelTransfer('${t.ID}')">Cancel</button>`);
+    } else {
+      if (pull && t.Status === 'success') {
+        actions.push(`<a class="btn sm" href="/api/admin/transfers/${t.ID}/download">Download</a>`);
+      }
+      actions.push(`<button class="btn sm" onclick="delTransfer('${t.ID}')">Remove</button>`);
+    }
+    return [
+      statusBadge(t.Status),
+      pull ? '<span title="pulled from client">⬇ pull</span>' : '<span title="pushed to client">⬆ push</span>',
+      esc(t.Filename),
+      esc(pull ? t.SourcePath : (t.WrittenPath || t.DestPath)),
+      fmtBytes(t.Size),
+      transferProgress(t),
+      fmtTime(t.CreatedAt),
+      actions.join(' '),
+    ];
+  }), 'No transfers yet.');
+
+  const cmds = await api('GET', '/api/admin/commands?agent=' + agentID);
+  fillRows('cmds-tbl', cmds.map(c => [
+    statusBadge(c.Status),
+    esc(c.Shell),
+    `<code>${esc(c.Command.length > 80 ? c.Command.slice(0, 80) + '…' : c.Command)}</code>`,
+    c.Status === 'running' ? '' : (c.Status === 'cancelled' ? '—' : String(c.ExitCode)),
+    fmtTime(c.CreatedAt),
+    `<button class="btn sm" onclick="viewCommand('${c.ID}')">View</button>
+     <button class="btn sm" onclick="delCommand('${c.ID}')">Remove</button>`,
+  ]), 'No commands run yet.');
 
   const runs = await api('GET', '/api/admin/runs?agent=' + agentID);
   fillRows('runs-tbl', runs.map(r => [
@@ -140,6 +259,237 @@ async function cancelRun(id) {
     // The run only actually stops once the agent reports back; the
     // existing 5s auto-refresh picks that up without racing it here.
   } catch (err) { toast(err.message); }
+}
+function transferProgress(t) {
+  if (t.Status === 'success') return t.Direction === 'pull' ? '✓ received' : '✓ delivered';
+  if (t.Status === 'queued') return '<span class="muted">client offline — queued</span>';
+  if (t.Status === 'error' || t.Status === 'cancelled') return '—';
+  // running — a pull may not know the total until it arrives.
+  if (t.Size > 0) {
+    const pct = Math.min(100, Math.round((t.BytesDone / t.Size) * 100));
+    return `${fmtBytes(t.BytesDone)} / ${fmtBytes(t.Size)} (${pct}%)`;
+  }
+  return fmtBytes(t.BytesDone);
+}
+
+// ---- remote file browser ----
+// Entries are referenced from row handlers by integer index, never by
+// interpolating a filesystem path into HTML/JS (paths can contain quotes,
+// backslashes and angle brackets).
+let browsePath = '';
+let browseParent = '';
+let browseEntries = [];
+// Pulls started from the browser, keyed by the file's full path, so the row
+// you pulled from turns into a live status and then a Download link — right
+// where you clicked, not hidden behind the dialog.
+let pulls = {}; // path -> { id, status: 'pulling'|'ready'|'error' }
+
+async function openBrowser(path) {
+  pulls = {};
+  el('browse-dlg').showModal();
+  await browseTo(path);
+}
+async function browseTo(path) {
+  el('browse-err').hidden = true;
+  const tbody = document.querySelector('#browse-tbl tbody');
+  tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
+  let l;
+  try {
+    l = await api('GET', `/api/admin/agents/${agentID}/browse?path=` + encodeURIComponent(path));
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="muted">${esc(err.message)}</td></tr>`;
+    return;
+  }
+  browsePath = l.path || '';
+  browseParent = l.parent || '';
+  browseEntries = l.entries || [];
+  el('browse-path').textContent = browsePath || '(filesystem roots)';
+  el('browse-up').disabled = !browseParent && browsePath === '';
+  if (l.error) { el('browse-err').hidden = false; el('browse-err').textContent = l.error; }
+  renderBrowseRows();
+}
+function pullActionCell(e, i) {
+  if (e.is_dir) return '';
+  const p = pulls[e.path];
+  if (!p) return `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`;
+  if (p.status === 'ready')
+    return `<a class="btn sm primary" href="/api/admin/transfers/${p.id}/download">⬇ Download</a>`;
+  if (p.status === 'error')
+    return `<span class="cmd-err">pull failed</span> <button class="btn sm" onclick="pullIdx(${i})">Retry</button>`;
+  return `<span class="muted">pulling…</span>`;
+}
+function renderBrowseRows() {
+  fillRows('browse-tbl', browseEntries.map((e, i) => [
+    e.is_dir
+      ? `<a href="#" onclick="browseIdx(${i});return false">📁 ${esc(e.name)}</a>`
+      : `📄 ${esc(e.name)}`,
+    e.is_dir ? '' : fmtBytes(e.size),
+    e.mtime ? fmtTime(e.mtime) : '',
+    pullActionCell(e, i),
+  ]), 'Empty folder.');
+}
+function browseIdx(i) { const e = browseEntries[i]; if (e) browseTo(e.path); }
+function browseUp() {
+  if (browseParent) browseTo(browseParent);
+  else if (browsePath !== '') browseTo(''); // step up to the roots list
+}
+async function pullIdx(i) {
+  const e = browseEntries[i];
+  if (!e) return;
+  try {
+    const res = await api('POST', `/api/admin/agents/${agentID}/pull`, {source_path: e.path});
+    pulls[e.path] = {id: res.transfer_id, status: 'pulling'};
+    renderBrowseRows();     // row immediately shows "pulling…"
+    pollPull(e.path);
+    load();                 // also refresh the persistent transfers table
+  } catch (err) { toast(err.message); }
+}
+async function pollPull(path) {
+  const p = pulls[path];
+  if (!p) return;
+  let t;
+  try { t = await api('GET', `/api/admin/transfers/${p.id}`); }
+  catch { return; }
+  if (t.Status === 'success') p.status = 'ready';
+  else if (t.Status === 'error' || t.Status === 'cancelled') p.status = 'error';
+  else { setTimeout(() => pollPull(path), 1000); return; }
+  renderBrowseRows();       // swap "pulling…" for the Download link
+}
+async function pushHere() {
+  const input = el('browse-push');
+  const f = input.files[0];
+  if (!f) return;
+  if (!browsePath) { toast('open a folder first'); input.value = ''; return; }
+  const dir = browsePath.endsWith('/') ? browsePath : browsePath + '/';
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('dest_path', dir);
+  fd.append('overwrite', '0');
+  try {
+    const res = await fetch(`/api/admin/agents/${agentID}/transfers`, {
+      method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    toast('Pushing file to ' + dir);
+    load();
+  } catch (err) { toast(err.message); }
+  input.value = '';
+}
+el('send-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = el('send-file').files[0];
+  if (!f) { toast('choose a file'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('dest_path', el('send-dest').value);
+  fd.append('overwrite', el('send-overwrite').checked ? '1' : '0');
+  try {
+    const res = await fetch(`/api/admin/agents/${agentID}/transfers`, {
+      method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    toast(data.queued ? 'Client offline — file queued for delivery' : 'Sending file to client');
+    el('send-dlg').close();
+    el('send-form').reset();
+    load();
+  } catch (err) { toast(err.message); }
+});
+async function cancelTransfer(id) {
+  try {
+    await api('POST', `/api/admin/transfers/${id}/cancel`);
+    toast('Cancellation requested');
+  } catch (err) { toast(err.message); }
+}
+async function delTransfer(id) {
+  if (!confirm('Remove this transfer record and its stored copy on the server?')) return;
+  await api('DELETE', `/api/admin/transfers/${id}`);
+  load();
+}
+// ---- remote command console ----
+let activeCmd = null; // { id, seq }
+let cmdTimer = null;
+const CMD_PAGE = 2000; // must match the server's maxCommandOutputPoll
+
+function setShellOptions(os) {
+  const sel = el('cmd-shell');
+  if (sel.dataset.filled) return;
+  const opts = /windows/i.test(os || '')
+    ? [['powershell', 'PowerShell'], ['cmd', 'cmd']]
+    : [['sh', 'sh']];
+  sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+  sel.dataset.filled = '1';
+}
+el('cmd-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const command = el('cmd-input').value.trim();
+  if (!command) return;
+  try {
+    const res = await api('POST', `/api/admin/agents/${agentID}/commands`,
+      {shell: el('cmd-shell').value, command});
+    el('cmd-input').value = '';
+    startStream(res.command_id, true);
+    load();
+  } catch (err) { toast(err.message); }
+});
+function stopStream() {
+  if (cmdTimer) { clearInterval(cmdTimer); cmdTimer = null; }
+}
+function startStream(id, fresh) {
+  stopStream();
+  activeCmd = {id, seq: 0};
+  const out = el('cmd-output');
+  out.hidden = false;
+  if (fresh) out.textContent = '';
+  pollCommand();
+  cmdTimer = setInterval(pollCommand, 1000);
+}
+async function pollCommand() {
+  if (!activeCmd) return;
+  let data;
+  try {
+    data = await api('GET', `/api/admin/commands/${activeCmd.id}?since=${activeCmd.seq}`);
+  } catch (err) { stopStream(); return; }
+  const out = el('cmd-output');
+  const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
+  const lines = data.output || [];
+  for (const l of lines) {
+    const span = document.createElement('span');
+    if (l.stream === 'stderr') span.className = 'cmd-err';
+    span.textContent = l.line + '\n';
+    out.appendChild(span);
+    activeCmd.seq = l.seq;
+  }
+  if (atBottom) out.scrollTop = out.scrollHeight;
+
+  const c = data.command;
+  const running = c.Status === 'running';
+  el('cmd-cancel').hidden = !running;
+  el('cmd-run').disabled = running;
+  // When finished, keep draining if a full page came back (more may remain).
+  if (!running && lines.length < CMD_PAGE) {
+    stopStream();
+    const foot = document.createElement('span');
+    foot.className = c.Status === 'success' ? 'cmd-done' : 'cmd-err';
+    foot.textContent = `\n[${c.Status}${c.Status === 'cancelled' ? '' : ', exit ' + c.ExitCode}]\n`;
+    out.appendChild(foot);
+    out.scrollTop = out.scrollHeight;
+    el('cmd-run').disabled = false;
+    load();
+  }
+}
+function viewCommand(id) { startStream(id, true); }
+async function cancelCommand() {
+  if (!activeCmd) return;
+  try { await api('POST', `/api/admin/commands/${activeCmd.id}/cancel`); }
+  catch (err) { toast(err.message); }
+}
+async function delCommand(id) {
+  if (!confirm('Remove this command and its output?')) return;
+  await api('DELETE', `/api/admin/commands/${id}`);
+  if (activeCmd && activeCmd.id === id) { stopStream(); el('cmd-output').hidden = true; }
+  load();
 }
 async function delSnap(id) {
   if (!confirm('Delete this snapshot? Its data is removed at the next cleanup.')) return;

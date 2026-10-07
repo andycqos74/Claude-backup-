@@ -34,6 +34,17 @@ const (
 	MsgSchedInventory  = "sched_inventory"
 	MsgSchedResult     = "sched_result"
 
+	// agent -> server (file push)
+	MsgTransferProgress = "transfer_progress"
+	MsgTransferDone     = "transfer_done"
+
+	// agent -> server (file browser)
+	MsgDirListing = "dir_listing"
+
+	// agent -> server (remote command console)
+	MsgCommandOutput = "command_output"
+	MsgCommandDone   = "command_done"
+
 	// server -> agent
 	MsgJobsUpdate     = "jobs_update"
 	MsgRunBackup      = "run_backup"
@@ -42,6 +53,32 @@ const (
 	MsgDiscoverDocker = "discover_docker"
 	MsgListSched      = "list_sched"
 	MsgSchedAction    = "sched_action"
+
+	// server -> agent (file push/pull)
+	MsgPushFile       = "push_file"
+	MsgPullFile       = "pull_file"
+	MsgCancelTransfer = "cancel_transfer"
+
+	// server -> agent (file browser)
+	MsgBrowseDir = "browse_dir"
+
+	// server -> agent (remote command console)
+	MsgRunCommand    = "run_command"
+	MsgCancelCommand = "cancel_command"
+)
+
+// Transfer directions.
+const (
+	DirectionPush = "push" // server -> client
+	DirectionPull = "pull" // client -> server
+)
+
+// Command shells. powershell and cmd are Windows-only; sh is used on
+// Linux/macOS.
+const (
+	ShellPowerShell = "powershell"
+	ShellCmd        = "cmd"
+	ShellSh         = "sh"
 )
 
 // Scheduled-task actions the server may ask an agent to perform. The set is
@@ -246,6 +283,117 @@ type RunDone struct {
 	SnapshotID string   `json:"snapshot_id,omitempty"`
 	Stats      RunStats `json:"stats"`
 	Error      string   `json:"error,omitempty"`
+}
+
+// PushFile instructs the agent to fetch one file the admin uploaded on the
+// server and write it to the client's disk in the background. The agent is
+// a headless service, so nothing appears on the client's screen; progress
+// is reported back to the server only. The payload itself travels over the
+// authenticated HTTPS data plane (like blobs), not the control socket.
+type PushFile struct {
+	TransferID string `json:"transfer_id"`
+	// DestPath is where to write on the client. A path ending in a slash or
+	// backslash (or naming an existing directory) is treated as a target
+	// directory and Filename is appended; otherwise it is the full target
+	// filename.
+	DestPath  string `json:"dest_path"`
+	Filename  string `json:"filename"`
+	Hash      string `json:"hash"` // sha256 hex of the raw content, verified on arrival
+	Size      int64  `json:"size"`
+	Mode      uint32 `json:"mode,omitempty"` // unix perms; ignored on Windows
+	Overwrite bool   `json:"overwrite"`
+}
+
+// PullFile instructs the agent to read one file off the client's disk and
+// upload it to the server, where the operator can then download it. Like a
+// push, it runs in the agent's background service and is observed only from
+// the server. The payload travels over the authenticated HTTPS data plane.
+type PullFile struct {
+	TransferID string `json:"transfer_id"`
+	SourcePath string `json:"source_path"` // absolute path of the file to fetch off the client
+}
+
+// BrowseDir asks the agent to list one directory on the client so the server
+// GUI can show a file browser. An empty Path means "the filesystem roots"
+// (drive letters on Windows, "/" elsewhere).
+type BrowseDir struct {
+	RequestID string `json:"request_id"`
+	Path      string `json:"path"`
+}
+
+// DirEntry is one item in a browsed directory.
+type DirEntry struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"` // full path, so the GUI can navigate without re-joining
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size,omitempty"`
+	Mtime int64  `json:"mtime,omitempty"` // unix seconds
+}
+
+// DirListing is the agent's answer to BrowseDir.
+type DirListing struct {
+	RequestID string     `json:"request_id"`
+	Path      string     `json:"path"`   // the (cleaned, absolute) path listed
+	Parent    string     `json:"parent"` // parent path for an "up" control ("" at a root)
+	Entries   []DirEntry `json:"entries,omitempty"`
+	Error     string     `json:"error,omitempty"`
+}
+
+// TransferProgress is streamed while a pushed file is being written.
+type TransferProgress struct {
+	TransferID string `json:"transfer_id"`
+	BytesDone  int64  `json:"bytes_done"`
+	BytesTotal int64  `json:"bytes_total"`
+}
+
+// TransferDone finalises a file push. Status is one of the Run* terminal
+// statuses (success | error | cancelled).
+type TransferDone struct {
+	TransferID string `json:"transfer_id"`
+	Status     string `json:"status"`
+	Path       string `json:"path,omitempty"` // the absolute path actually written
+	Error      string `json:"error,omitempty"`
+}
+
+// CancelTransfer asks the agent to abort an in-progress file push.
+type CancelTransfer struct {
+	TransferID string `json:"transfer_id"`
+}
+
+// RunCommand asks the agent to run a shell command on the client and stream
+// its output back. It runs in the agent's background service (as that
+// service's account — LocalSystem or root), so nothing appears on the
+// client's screen; the operator sees the output only in the server GUI.
+type RunCommand struct {
+	CommandID string `json:"command_id"`
+	Shell     string `json:"shell"` // powershell | cmd | sh
+	Command   string `json:"command"`
+}
+
+// CancelCommand asks the agent to terminate a running command.
+type CancelCommand struct {
+	CommandID string `json:"command_id"`
+}
+
+// CommandCancelled is the exact CommandDone.Error the agent sends when a
+// command was terminated by a cancel request, so the server can distinguish
+// it from a genuine failure.
+const CommandCancelled = "cancelled"
+
+// CommandOutput is one line of a running command's output.
+type CommandOutput struct {
+	CommandID string `json:"command_id"`
+	Stream    string `json:"stream"` // stdout | stderr
+	Line      string `json:"line"`
+}
+
+// CommandDone finalises a command run. ExitCode is the process exit status
+// (0 = success); Error is set only when the command could not be launched or
+// was cancelled.
+type CommandDone struct {
+	CommandID string `json:"command_id"`
+	ExitCode  int    `json:"exit_code"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ManifestEntry is one line of a snapshot manifest (JSONL, zstd-compressed
