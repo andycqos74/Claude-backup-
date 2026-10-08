@@ -53,6 +53,36 @@ Get-ScheduledTask | ForEach-Object {
   $t = $_
   $info = $null
   try { $info = $t | Get-ScheduledTaskInfo } catch {}
+
+  # Decompose a single understood trigger so the GUI can pre-fill the editor.
+  $sk=''; $sa=''; $si=0; $sd=''
+  $trg = @($t.Triggers)
+  if ($trg.Count -eq 1) {
+    $g = $trg[0]
+    $cls = [string]$g.CimClass.CimClassName
+    $start = [string]$g.StartBoundary
+    $hhmm = ''
+    if ($start -match 'T(\d{2}):(\d{2})') { $hhmm = $matches[1] + ':' + $matches[2] }
+    $repInt = ''
+    try { if ($g.Repetition -and $g.Repetition.Interval) { $repInt = [string]$g.Repetition.Interval } } catch {}
+    if ($cls -like '*BootTrigger') { $sk='onstart' }
+    elseif ($cls -like '*LogonTrigger') { $sk='onlogon' }
+    elseif ($cls -like '*DailyTrigger') { $sk='daily'; $sa=$hhmm; try { $si=[int]$g.DaysInterval } catch {} }
+    elseif ($cls -like '*WeeklyTrigger') {
+      $sk='weekly'; $sa=$hhmm; try { $si=[int]$g.WeeksInterval } catch {}
+      $m=0; try { $m=[int]$g.DaysOfWeek } catch {}
+      $dn=@(); if($m -band 1){$dn+='Sun'}; if($m -band 2){$dn+='Mon'}; if($m -band 4){$dn+='Tue'}; if($m -band 8){$dn+='Wed'}; if($m -band 16){$dn+='Thu'}; if($m -band 32){$dn+='Fri'}; if($m -band 64){$dn+='Sat'}
+      $sd = ($dn -join ',')
+    }
+    elseif ($cls -like '*TimeTrigger') {
+      if ($repInt -match '^PT(\d+)H(\d+)M$') { $sk='minutes'; $sa=$hhmm; $si=([int]$matches[1]*60 + [int]$matches[2]) }
+      elseif ($repInt -match '^PT(\d+)H$') { $sk='hourly'; $sa=$hhmm; $si=[int]$matches[1] }
+      elseif ($repInt -match '^PT(\d+)M$') { $sk='minutes'; $sa=$hhmm; $si=[int]$matches[1] }
+      else { $sk='once'; $sa=$start }
+    }
+    if ($sk -ne '' -and $sk -ne 'once' -and $sk -ne 'onstart' -and $sk -ne 'onlogon' -and $si -lt 1) { $si=1 }
+  }
+
   [pscustomobject]@{
     name        = [string]$t.TaskName
     path        = [string]$t.TaskPath
@@ -65,6 +95,10 @@ Get-ScheduledTask | ForEach-Object {
     last_run    = if ($info) { [string]$info.LastRunTime } else { '' }
     next_run    = if ($info) { [string]$info.NextRunTime } else { '' }
     last_result = if ($info) { [int64]$info.LastTaskResult } else { [int64]0 }
+    sched_kind     = $sk
+    sched_at       = $sa
+    sched_interval = $si
+    sched_days     = $sd
   } | ConvertTo-Json -Depth 4 -Compress
 }`
 

@@ -464,6 +464,16 @@ type SchedTask struct {
 	LastRun     string   `json:"last_run,omitempty"`
 	NextRun     string   `json:"next_run,omitempty"`
 	LastResult  int64    `json:"last_result"`
+
+	// Best-effort structured form of the task's single trigger, so the GUI
+	// can pre-fill the schedule editor. SchedKind is empty when the schedule
+	// can't be represented by the editor (event triggers, monthly, or
+	// multiple triggers). These are scalars on purpose — no nested arrays —
+	// so one odd task can never break inventory parsing.
+	SchedKind     string `json:"sched_kind,omitempty"`     // once|minutes|hourly|daily|weekly|onstart|onlogon
+	SchedAt       string `json:"sched_at,omitempty"`       // "HH:MM", or full datetime for once
+	SchedInterval int    `json:"sched_interval,omitempty"` // N for minutes/hourly/daily/weekly
+	SchedDays     string `json:"sched_days,omitempty"`     // weekly: comma-separated, e.g. "Mon,Wed"
 }
 
 // SchedInventory is the agent's answer to ListSched.

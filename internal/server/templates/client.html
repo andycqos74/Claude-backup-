@@ -126,6 +126,7 @@
   <div class="sched-card">
     <h3 style="margin-top:0">Change schedule</h3>
     <p class="muted" id="sched-modal-task" style="margin-top:-0.5rem"></p>
+    <p class="muted" id="sched-current" style="margin-top:-0.4rem;font-size:0.85rem"></p>
     <label>Frequency
       <select id="sched-kind" onchange="schedKindChanged()">
         <option value="minutes">Every N minutes</option>
@@ -529,13 +530,17 @@ async function loadSched() {
   }
 }
 
+// Tasks are referenced from row handlers by integer index, never by
+// interpolating a task name/path into HTML (they can contain quotes and
+// backslashes).
+let schedTaskList = [];
 function renderSched(tasks) {
+  schedTaskList = tasks;
   el('sched-tbl').hidden = false;
-  fillRows('sched-tbl', tasks.map(t => {
-    const key = esc(JSON.stringify({name: t.name, path: t.path}));
+  fillRows('sched-tbl', tasks.map((t, i) => {
     const toggle = t.enabled
-      ? `<button class="btn sm" onclick='schedAct(${key},"disable")'>Disable</button>`
-      : `<button class="btn sm" onclick='schedAct(${key},"enable")'>Enable</button>`;
+      ? `<button class="btn sm" onclick="schedAct(${i},'disable')">Disable</button>`
+      : `<button class="btn sm" onclick="schedAct(${i},'enable')">Enable</button>`;
     const lastResult = t.last_result === 0 ? '<span class="muted">OK (0)</span>' : esc(String(t.last_result));
     return [
       `${esc(t.name)}<br><span class="muted" style="font-size:0.8rem">${esc(t.path || '')}</span>`,
@@ -543,33 +548,47 @@ function renderSched(tasks) {
       (t.triggers && t.triggers.length) ? esc(t.triggers.join('; ')) : '<span class="muted">none</span>',
       t.next_run ? esc(t.next_run) : '<span class="muted">—</span>',
       lastResult,
-      `<button class="btn sm" onclick='schedAct(${key},"run")'>Run</button>
+      `<button class="btn sm" onclick="schedAct(${i},'run')">Run</button>
        ${toggle}
-       <button class="btn sm" onclick='openSched(${key})'>Edit schedule</button>`,
+       <button class="btn sm" onclick="openSched(${i})">Edit schedule</button>`,
     ];
   }), 'No scheduled tasks reported.');
 }
 
-async function schedAct(task, action) {
+async function schedAct(i, action) {
+  const t = schedTaskList[i];
+  if (!t) return;
   const verb = {run:'Run now', enable:'Enable', disable:'Disable'}[action];
-  if (!confirm(`${verb}: "${task.name}"?`)) return;
+  if (!confirm(`${verb}: "${t.name}"?`)) return;
   try {
     await api('POST', `/api/admin/agents/${agentID}/sched-tasks/action`,
-      {action, name: task.name, path: task.path});
+      {action, name: t.name, path: t.path});
     toast('Done');
     loadSched();
   } catch (err) { toast(err.message); }
 }
 
 let editing = null;
-function openSched(task) {
-  editing = task;
-  el('sched-modal-task').textContent = task.path + task.name;
-  // day checkboxes
+function openSched(i) {
+  const t = schedTaskList[i];
+  if (!t) return;
+  editing = t;
+  el('sched-modal-task').textContent = (t.path || '') + t.name;
+  const cur = (t.triggers && t.triggers.length) ? t.triggers.join('; ') : 'none';
+  el('sched-current').textContent = 'Current: ' + cur;
+
+  // Pre-fill from the task's current schedule when the agent could represent
+  // it; otherwise fall back to a sensible default so a new schedule can still
+  // be set.
+  const kind = t.sched_kind || 'daily';
+  const checked = (t.sched_days ? t.sched_days.split(',') : []);
   el('sched-days').innerHTML = DAYS.map(d =>
     `<label style="display:inline-flex;align-items:center;gap:0.3rem;margin:0">
-       <input type="checkbox" value="${d}"> ${d}</label>`).join('');
-  el('sched-kind').value = 'daily';
+       <input type="checkbox" value="${d}"${checked.includes(d) ? ' checked' : ''}> ${d}</label>`).join('');
+  el('sched-kind').value = kind;
+  el('sched-interval').value = t.sched_interval > 0 ? t.sched_interval : 1;
+  el('sched-time').value = (kind !== 'once' && t.sched_at) ? t.sched_at : '09:00';
+  el('sched-once').value = (kind === 'once' && t.sched_at) ? t.sched_at.slice(0, 16) : '';
   schedKindChanged();
   el('sched-modal').hidden = false;
 }
