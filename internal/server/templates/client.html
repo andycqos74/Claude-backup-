@@ -106,6 +106,60 @@
   <thead><tr><th>Status</th><th>Job</th><th>Mode</th><th>Started</th><th>Duration</th><th>Error</th><th></th></tr></thead>
   <tbody></tbody>
 </table>
+
+<div class="page-head">
+  <h2>Scheduled tasks</h2>
+  <span class="spacer"></span>
+  <button class="btn" id="sched-load-btn" onclick="loadSched()">Load from client</button>
+</div>
+<p class="muted" id="sched-note">
+  View the Windows Task Scheduler on this client. You can run a task now, enable or disable it,
+  and change <em>when</em> it runs — but not what it does: a task's program and arguments can't be
+  edited from here.
+</p>
+<table class="tbl" id="sched-tbl" hidden>
+  <thead><tr><th>Task</th><th>State</th><th>Schedule</th><th>Next run</th><th>Last result</th><th></th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<div id="sched-modal" class="sched-modal" hidden>
+  <div class="sched-card">
+    <h3 style="margin-top:0">Change schedule</h3>
+    <p class="muted" id="sched-modal-task" style="margin-top:-0.5rem"></p>
+    <label>Frequency
+      <select id="sched-kind" onchange="schedKindChanged()">
+        <option value="minutes">Every N minutes</option>
+        <option value="hourly">Every N hours</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="once">Once (specific date/time)</option>
+        <option value="onstart">At system startup</option>
+        <option value="onlogon">At user logon</option>
+      </select>
+    </label>
+    <div id="sched-f-interval"><label id="sched-interval-lbl">Interval
+      <input type="number" id="sched-interval" min="1" value="1"></label></div>
+    <div id="sched-f-time"><label>Start time (24h)
+      <input type="time" id="sched-time" value="09:00"></label></div>
+    <div id="sched-f-once"><label>Date &amp; time
+      <input type="datetime-local" id="sched-once"></label></div>
+    <div id="sched-f-days"><label>Days of week</label>
+      <div id="sched-days" style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.25rem"></div></div>
+    <div class="page-head" style="margin-top:1rem">
+      <span class="spacer"></span>
+      <button class="btn" onclick="closeSched()">Cancel</button>
+      <button class="btn primary" onclick="saveSched()">Apply</button>
+    </div>
+  </div>
+</div>
+<style>
+.sched-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: flex-start; justify-content: center; padding: 6vh 1rem; z-index: 60; }
+.sched-card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1.25rem 1.5rem; width: 420px; max-width: 100%; }
+.sched-card label { display: block; margin-top: 0.75rem; font-size: 0.9rem; }
+</style>
+
 <script>
 const agentID = document.body.dataset.id;
 el('new-job-link').href = '/jobs/new?agent=' + agentID;
@@ -453,6 +507,110 @@ async function removeAgent() {
   await api('DELETE', `/api/admin/agents/${agentID}`);
   location.href = '/clients';
 }
+
+// ---- scheduled tasks (loaded on demand: each load round-trips to the client) ----
+const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+async function loadSched() {
+  const btn = el('sched-load-btn');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  try {
+    const inv = await api('GET', `/api/admin/agents/${agentID}/sched-tasks`);
+    if (!inv.available) {
+      el('sched-note').textContent = inv.error || 'Scheduled tasks are not available on this client.';
+      el('sched-tbl').hidden = true;
+    } else {
+      renderSched(inv.tasks || []);
+    }
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Reload from client';
+  }
+}
+
+function renderSched(tasks) {
+  el('sched-tbl').hidden = false;
+  fillRows('sched-tbl', tasks.map(t => {
+    const key = esc(JSON.stringify({name: t.name, path: t.path}));
+    const toggle = t.enabled
+      ? `<button class="btn sm" onclick='schedAct(${key},"disable")'>Disable</button>`
+      : `<button class="btn sm" onclick='schedAct(${key},"enable")'>Enable</button>`;
+    const lastResult = t.last_result === 0 ? '<span class="muted">OK (0)</span>' : esc(String(t.last_result));
+    return [
+      `${esc(t.name)}<br><span class="muted" style="font-size:0.8rem">${esc(t.path || '')}</span>`,
+      esc(t.state) + (t.enabled ? '' : ' <span class="muted">(off)</span>'),
+      (t.triggers && t.triggers.length) ? esc(t.triggers.join('; ')) : '<span class="muted">none</span>',
+      t.next_run ? esc(t.next_run) : '<span class="muted">—</span>',
+      lastResult,
+      `<button class="btn sm" onclick='schedAct(${key},"run")'>Run</button>
+       ${toggle}
+       <button class="btn sm" onclick='openSched(${key})'>Edit schedule</button>`,
+    ];
+  }), 'No scheduled tasks reported.');
+}
+
+async function schedAct(task, action) {
+  const verb = {run:'Run now', enable:'Enable', disable:'Disable'}[action];
+  if (!confirm(`${verb}: "${task.name}"?`)) return;
+  try {
+    await api('POST', `/api/admin/agents/${agentID}/sched-tasks/action`,
+      {action, name: task.name, path: task.path});
+    toast('Done');
+    loadSched();
+  } catch (err) { toast(err.message); }
+}
+
+let editing = null;
+function openSched(task) {
+  editing = task;
+  el('sched-modal-task').textContent = task.path + task.name;
+  // day checkboxes
+  el('sched-days').innerHTML = DAYS.map(d =>
+    `<label style="display:inline-flex;align-items:center;gap:0.3rem;margin:0">
+       <input type="checkbox" value="${d}"> ${d}</label>`).join('');
+  el('sched-kind').value = 'daily';
+  schedKindChanged();
+  el('sched-modal').hidden = false;
+}
+function closeSched() { el('sched-modal').hidden = true; editing = null; }
+
+function schedKindChanged() {
+  const k = el('sched-kind').value;
+  const show = (id, on) => { el(id).hidden = !on; };
+  show('sched-f-interval', k === 'minutes' || k === 'hourly' || k === 'daily' || k === 'weekly');
+  show('sched-f-time', k === 'minutes' || k === 'hourly' || k === 'daily' || k === 'weekly');
+  show('sched-f-once', k === 'once');
+  show('sched-f-days', k === 'weekly');
+  const lbl = {minutes:'Every N minutes', hourly:'Every N hours', daily:'Every N days', weekly:'Every N weeks'}[k];
+  if (lbl) el('sched-interval-lbl').childNodes[0].nodeValue = lbl + ' ';
+}
+
+async function saveSched() {
+  if (!editing) return;
+  const k = el('sched-kind').value;
+  const schedule = {kind: k};
+  if (k === 'minutes' || k === 'hourly' || k === 'daily' || k === 'weekly') {
+    schedule.interval = parseInt(el('sched-interval').value, 10) || 1;
+    schedule.at = el('sched-time').value;
+  }
+  if (k === 'weekly') {
+    schedule.days_of_week = [...el('sched-days').querySelectorAll('input:checked')].map(i => i.value);
+    if (!schedule.days_of_week.length) { toast('Pick at least one day'); return; }
+  }
+  if (k === 'once') {
+    if (!el('sched-once').value) { toast('Pick a date and time'); return; }
+    schedule.at = el('sched-once').value; // "YYYY-MM-DDTHH:MM"
+  }
+  try {
+    await api('POST', `/api/admin/agents/${agentID}/sched-tasks/action`,
+      {action: 'set_schedule', name: editing.name, path: editing.path, schedule});
+    toast('Schedule updated');
+    closeSched();
+    loadSched();
+  } catch (err) { toast(err.message); }
+}
+
 load();
 setInterval(load, 5000);
 </script>

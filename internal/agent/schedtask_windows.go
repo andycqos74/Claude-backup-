@@ -1,0 +1,58 @@
+//go:build windows
+
+package agent
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"centralbackup/internal/proto"
+)
+
+// schedRunPowerShell runs a script by feeding it to PowerShell on stdin
+// (`-Command -`), which avoids any argument quoting of the script itself.
+func schedRunPowerShell(ctx context.Context, script string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "powershell.exe",
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-")
+	cmd.Stdin = strings.NewReader(script)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return stdout.Bytes(), fmt.Errorf("%s", firstLine(msg))
+	}
+	return stdout.Bytes(), nil
+}
+
+func schedRunInventory(ctx context.Context) proto.SchedInventory {
+	out, err := schedRunPowerShell(ctx, schedInventoryScript)
+	if err != nil {
+		return proto.SchedInventory{Available: false, Error: err.Error()}
+	}
+	tasks, err := parseSchedInventory(out)
+	if err != nil {
+		return proto.SchedInventory{Available: false, Error: err.Error()}
+	}
+	return proto.SchedInventory{Available: true, Tasks: tasks}
+}
+
+func schedRunScript(ctx context.Context, script string) error {
+	_, err := schedRunPowerShell(ctx, script)
+	return err
+}
+
+// firstLine keeps PowerShell's often-multiline error output to its first,
+// most relevant line for display in the GUI.
+func firstLine(s string) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
