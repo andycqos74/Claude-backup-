@@ -464,3 +464,29 @@ enroll, full/incremental backup, restore, config sync and GC:
 ```bash
 scripts/e2e-test.sh
 ```
+
+## Double-click Windows installer package
+
+For a copy-and-run install with no command line, build the installer
+packages:
+
+```
+scripts/build-windows-package.sh
+```
+
+This produces `dist/windows/BackupAgent-Installer-x64.zip` (and `-x86` for
+32-bit Windows). To install on a client:
+
+1. Copy the matching zip to the PC and extract it (keep the files together).
+2. Double-click `Install.cmd` and approve the administrator (UAC) prompt.
+3. If the package is generic, paste the Server URL, enrollment token and
+   fingerprint from the server's Clients page when prompted. Installers
+   downloaded directly from the server embed these, so they install in one
+   click with nothing to paste.
+
+`Install.cmd` copies the agent into `%ProgramFiles%\BackupAgent`, registers
+and starts the `CentralBackupAgent` service, and is safe to re-run to update
+an existing install (it removes the old service first). `Uninstall.cmd`
+removes the service (credentials under `C:\ProgramData\BackupAgent` are kept).
+
+The templates live in `deploy/windows-installer/`.
