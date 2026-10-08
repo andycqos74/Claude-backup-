@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"centralbackup/internal/proto"
 )
@@ -145,5 +147,24 @@ func TestParseSchedInventory(t *testing.T) {
 	}
 	if tasks[1].Name != "B" || tasks[1].Enabled || tasks[1].LastResult != 267011 {
 		t.Errorf("bad task[1]: %+v", tasks[1])
+	}
+}
+
+func TestEncodePowerShellCommand(t *testing.T) {
+	script := "Get-ScheduledTask # café €"
+	enc := encodePowerShellCommand(script)
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatalf("not valid base64: %v", err)
+	}
+	if len(raw)%2 != 0 {
+		t.Fatalf("UTF-16LE bytes must be even length, got %d", len(raw))
+	}
+	u := make([]uint16, len(raw)/2)
+	for i := range u {
+		u[i] = uint16(raw[i*2]) | uint16(raw[i*2+1])<<8
+	}
+	if got := string(utf16.Decode(u)); got != script {
+		t.Errorf("round-trip mismatch: %q != %q", got, script)
 	}
 }

@@ -12,12 +12,14 @@ import (
 	"centralbackup/internal/proto"
 )
 
-// schedRunPowerShell runs a script by feeding it to PowerShell on stdin
-// (`-Command -`), which avoids any argument quoting of the script itself.
+// schedRunPowerShell runs a script via -EncodedCommand (base64 UTF-16LE).
+// Passing the script this way, rather than on stdin via `-Command -`, is
+// reliable from a non-interactive service process, where `-NonInteractive`
+// can decline to read stdin and leave the script silently unrun.
 func schedRunPowerShell(ctx context.Context, script string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe",
-		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-")
-	cmd.Stdin = strings.NewReader(script)
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+		"-EncodedCommand", encodePowerShellCommand(script))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

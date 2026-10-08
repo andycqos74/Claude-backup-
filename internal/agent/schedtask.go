@@ -4,15 +4,31 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"centralbackup/internal/proto"
 )
+
+// encodePowerShellCommand renders a script for PowerShell's -EncodedCommand
+// (base64 of the UTF-16LE bytes). This is the reliable way to hand a
+// multi-line script to powershell.exe from a service: no stdin, no argument
+// quoting, and no dependence on -Command reading standard input.
+func encodePowerShellCommand(script string) string {
+	u := utf16.Encode([]rune(script))
+	b := make([]byte, 2*len(u))
+	for i, r := range u {
+		binary.LittleEndian.PutUint16(b[i*2:], r)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
 
 // Scheduled-task management. The server can list a client's Windows
 // scheduled tasks and perform a deliberately small set of operations on
@@ -31,7 +47,8 @@ const schedActionTimeout = 30 * time.Second
 // schedInventoryScript emits one compact JSON object per task, newline
 // separated. Per-object ConvertTo-Json avoids PowerShell's habit of
 // unwrapping a single-element array, which a top-level array would hit.
-const schedInventoryScript = `$ErrorActionPreference='Stop'
+const schedInventoryScript = `try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$ErrorActionPreference='Stop'
 Get-ScheduledTask | ForEach-Object {
   $t = $_
   $info = $null
