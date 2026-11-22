@@ -49,18 +49,28 @@ before you build on it.
   percentage of content), and optional Reed–Solomon error correction
   (experimental).
 - **Storage backends.** Filesystem, S3-compatible, B2, Azure, GCS, SFTP,
-  WebDAV, rclone (and through rclone, OneDrive or Google Drive).
-- **Windows.** Native VSS support (os-snapshot policy, roughly
-  `--enable-volume-shadow-copy=when-available`, **verify** the exact flag
-  with `kopia policy set --help` on your version). Before/after actions are
+  WebDAV, Google Drive (native, but marked experimental and CLI-only), and
+  rclone for everything else, including OneDrive.
+- **Windows.** Native VSS through policy:
+  `kopia policy set <target> --enable-volume-shadow-copy=when-available`
+  (values: never, always, when-available, inherit). Before/after actions are
   also available.
+- **Checkpoints.** Long snapshots write periodic checkpoints
+  (`--checkpoint-interval`, at most 45 minutes), so an interrupted
+  multi-hour first backup does not start from zero.
 - **Repository server.** `kopia server start` fronts one repository for
-  many clients over gRPC/HTTPS. Each client authenticates as `user@host`,
-  ACLs limit it to its own snapshots, and storage credentials never leave the
-  server. Clients pin the server's TLS fingerprint
-  (`--server-cert-fingerprint`), the same model as this repo. Note the
-  upstream discussion "server mode is insecure (server must be trusted)":
-  clients must trust the server, which is fine when you run it yourself.
+  many clients over gRPC/HTTPS. Each client authenticates as `user@host`
+  (`kopia server user add`), and storage credentials never leave the server.
+  Clients pin the server's TLS fingerprint (`--server-cert-fingerprint`), the
+  same model as this repo. Default ACLs give each user FULL access to its own
+  snapshots and policies and APPEND-only access (read and write, no delete)
+  to content, so a client **cannot delete** other clients' snapshots.
+  Caveat from the docs: "Kopia does not currently perform access control
+  checks" on object IDs, so a client that learns another client's object ID
+  can read that data. Treat clients as mutually semi-trusted for
+  confidentiality, though not for deletion. There is also an upstream forum
+  thread titled "server mode is insecure (server must be trusted)". The
+  server sees plaintext, which is fine when you run it yourself.
 - **What Kopia does *not* have.** Fleet management. There is no push channel
   from the server to clients. Each client schedules itself (KopiaUI or a
   local `kopia server`). The repository server cannot tell a client "back up
@@ -75,9 +85,12 @@ before you build on it.
 ### Robustness: **Kopia**
 
 - The repository is self-describing. If you lose this repo's SQLite
-  database, the manifests are orphaned (they are named only by snapshot ID)
-  and the blob store becomes a pile of hashes. Losing Kopia's local config
-  costs nothing.
+  database, the manifests are orphaned. They are named only by snapshot ID,
+  and `proto.ManifestEntry` holds only path, size, mode, mtime and hash, with
+  no client, job or time. The blob store becomes a pile of hashes. Losing
+  Kopia's local config costs nothing.
+- The cost on Kopia's side: the **repository password is unrecoverable**.
+  Lose it and every backup is gone. Store it in Vaultwarden on day one.
 - Encryption and authenticated content mean a tampered or corrupted object
   is detected and cannot be read by the storage provider.
 - VSS means consistent Windows backups of open files. This repo skips them.
@@ -85,9 +98,7 @@ before you build on it.
   (including the v0.23.1 race fix). This repo's GC is careful (abort on an
   unreadable manifest, grace window, commit lock) but has one user base.
 - Where this repo is better: end-to-end hash verification is simple and easy
-  to audit, and "no snapshot on cancel" semantics are clear. Kopia has the
-  same property; it also never commits a partial snapshot unless asked
-  (checkpoints).
+  to audit, and "no snapshot on cancel" semantics are clear.
 
 ### Features (backup engine only): **Kopia**
 
@@ -179,9 +190,13 @@ and the hub protocol stay as they are.
   so remote access for them keeps working either way.
 - Existing snapshots. There is no in-place conversion. Run both engines side
   by side and let the old snapshots age out under retention.
-- The OneDrive/Google Drive OAuth backends. Kopia reaches those only through
-  rclone, which works but is slower and more fragile than S3. Prefer an
-  S3-compatible target (B2, R2, Wasabi) for the repository.
+- The OneDrive OAuth backend. Kopia reaches OneDrive only through rclone.
+  Its native Google Drive backend is experimental. Prefer an S3-compatible
+  target (B2, R2, Wasabi) for the repository.
+- Zero-knowledge storage. Kopia encrypts against the *storage provider*,
+  but in the central-server topology the server holds the key and sees
+  plaintext, so roadmap item 5 (the server never sees plaintext) is
+  **not** delivered.
 
 ## 5. MeshCentral: remote desktop, terminal and files
 
@@ -234,11 +249,17 @@ Why not put everything behind the tunnel:
 - Cloudflare's request-body limits (100 MB on Free/Pro) and its terms on
   bulk non-web traffic make it a poor transport for backup data, and
   long-lived streams get cut.
-- MeshCentral is the exception: MeshAgent verifies the server by its
-  separate *agent certificate* hash, not the web TLS certificate, so it works
-  behind TLS offload (`tlsOffload`). You *can* run MeshAgent traffic through
-  the tunnel with a separate agent hostname. Remote desktop through Cloudflare
-  is usable but adds latency. A direct `agentPort` is better.
+- MeshCentral is **not** an exception. MeshCentral's reverse-proxy docs say
+  agents authenticate the server through the *web TLS certificate*. Behind
+  an offloading proxy, MeshCentral must be told (`certUrl`) which
+  certificate agents will see. Cloudflare's edge certificates are managed and
+  rotated by Cloudflare, so agents connecting through the tunnel would break
+  on rotation. Have MeshCentral terminate its own TLS. Point agents directly
+  at it on a published port with grey-cloud DNS. Point `cloudflared` at the
+  same HTTPS origin (`noTLSVerify` or the origin certificate) for the admin
+  UI only. **Verify**: whether MeshCentral supports a separate agent-only
+  port (`agentPort`) in your version. The docs page fetched lists
+  `AliasPort`, but `agentPort` was not confirmed.
 
 **Tailscale (or self-hosted Headscale): optional, and useful in one case.**
 - *Without it:* publish one port for agents (the hub plus Kopia gRPC can share
@@ -274,10 +295,27 @@ services:
                      builder; publishes the agent WSS port                  [tunnel, internal, agents, egress]
   kopia-server       kopia server start --tls-*; repository on /repo or S3;
                      publishes the gRPC port                                [internal, agents, egress]
-  meshcentral        tlsOffload for UI via tunnel; agentPort published      [tunnel, internal, agents]
+  meshcentral        own TLS; agent port published, UI via tunnel origin    [tunnel, internal, agents]
   mongodb (optional) MeshCentral uses NeDB by default; Mongo for larger fleets [internal]
   headscale (later)                                                         [agents]
 ```
+
+**Required change in this repo first.** Today the server serves GUI, admin
+API and agent API from one mux on one listener (`internal/server/server.go`,
+`web.go`), and `CB_PUBLIC_URL` is one value used for both enrollment
+commands and the OAuth redirect. Publishing "the agent port" would therefore
+publish the admin login as well. Split it:
+
+- A second listener (e.g. `:8444`) that serves only `/api/agent/*` and `/dl/*`,
+  with the pinned self-signed cert. Publish that one.
+- The existing listener for GUI and admin API, unpublished and reached only by
+  `cloudflared` on the internal network.
+- Two settings: an agent URL (baked into installers) and an admin URL (OAuth
+  redirect, links).
+
+MeshCentral needs the same care: if its UI and agent endpoint share a port,
+publishing it for agents also publishes the login page. Keep MeshCentral 2FA
+on, and restrict the published port by source IP where sites are known.
 
 The admin hostnames (e.g. `backup.example.com`, `mesh.example.com`) go through
 the tunnel behind Access. One agent hostname
@@ -321,7 +359,7 @@ Things to watch:
 | Phase | Work | Result |
 |---|---|---|
 | 0 | Run the compression/dedup test from §3 on real data, including one large DB or PST. Confirm Kopia's VSS flag and repository-server ACL behaviour on a Windows 10 test box. | Evidence to justify the switch. |
-| 1 | Add MeshCentral to the stack and put the UIs behind the tunnel and Access. Install MeshAgent from the bootstrapper. Add Desktop/Terminal buttons on the client page. | Remote access in one console. No engine risk. |
+| 1 | Split the controller into agent and admin listeners with two URLs (§7). Add MeshCentral to the stack and put the UIs behind the tunnel and Access. Install MeshAgent from the bootstrapper. Add Desktop/Terminal buttons on the client page. | Remote access in one console. No engine risk. |
 | 2 | Add the Kopia server container. Add a second engine to the agent (option A) chosen per job. The controller provisions Kopia users and policies and lists Kopia snapshots alongside existing ones. | Both engines run in parallel. New jobs use Kopia. |
 | 3 | Port restore (to client, and browser download) to Kopia. Make Kopia the default engine. Set up `sync-to` for an off-site mirror. Keep the legacy engine only for the Windows 7 build. | Old snapshots age out, and engine code shrinks. |
 | 4 (optional) | Headscale for zero public ports. Code-signed installer. Agent self-update. | Hardening. |
@@ -334,6 +372,10 @@ unchanged.
 ## Sources
 
 - [Kopia releases](https://github.com/kopia/kopia/releases)
+- [Kopia repository server](https://kopia.io/docs/repository-server/)
+- [Kopia repositories / backends](https://kopia.io/docs/repositories/)
+- [kopia policy set reference](https://kopia.io/docs/reference/command-line/common/policy-set/)
+- [kopia snapshot create reference](https://kopia.io/docs/reference/command-line/common/snapshot-create/)
 - [Kopia compression docs](https://kopia.io/docs/advanced/compression)
 - [Kopia features](https://kopia.io/docs/features/)
 - [Kopia FAQ](https://kopia.io/docs/faqs/)
