@@ -207,9 +207,9 @@ func (s *Server) handleTransferCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"transfer_id": id, "queued": !online})
 }
 
-// handleTransferPull starts a client->server file fetch: the admin names a
-// path on the client, and the agent uploads that file to the server where it
-// can be downloaded.
+// handleTransferPull starts a client->server fetch: the admin names a path
+// on the client, and the agent uploads it to the server where it can be
+// downloaded. A folder is pulled whole — every subfolder and file — as a zip.
 func (s *Server) handleTransferPull(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	if _, err := s.store.GetAgent(agentID); err != nil {
@@ -224,10 +224,10 @@ func (s *Server) handleTransferPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src := strings.TrimSpace(req.SourcePath)
-	filename := path.Base(strings.ReplaceAll(src, "\\", "/"))
+	filename := path.Base(strings.TrimRight(strings.ReplaceAll(src, "\\", "/"), "/"))
+	filename = strings.TrimSuffix(filename, ":") // a drive root like C:\ pulls as "C"
 	if filename == "." || filename == "/" || filename == "" {
-		httpError(w, http.StatusBadRequest, "source path does not name a file")
-		return
+		filename = "root"
 	}
 
 	id := store.NewID()
@@ -292,7 +292,11 @@ func (s *Server) handleTransferDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer dec.Close()
-	w.Header().Set("Content-Type", "application/octet-stream")
+	ctype := "application/octet-stream"
+	if strings.HasSuffix(strings.ToLower(t.Filename), ".zip") {
+		ctype = "application/zip"
+	}
+	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", t.Filename))
 	io.Copy(w, dec.IOReadCloser())
 }
@@ -376,7 +380,12 @@ func (s *Server) handleTransferUpload(w http.ResponseWriter, r *http.Request, ag
 		httpError(w, http.StatusBadRequest, "file upload failed")
 		return
 	}
-	if err := s.store.SetTransferPayload(t.ID, hex.EncodeToString(hasher.Sum(nil)), rawSize); err != nil {
+	// A pulled folder arrives as a zip archive of its whole tree.
+	filename := t.Filename
+	if r.URL.Query().Get("format") == "zip" && !strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		filename += ".zip"
+	}
+	if err := s.store.SetTransferPayload(t.ID, filename, hex.EncodeToString(hasher.Sum(nil)), rawSize); err != nil {
 		httpError(w, http.StatusInternalServerError, "database error")
 		return
 	}

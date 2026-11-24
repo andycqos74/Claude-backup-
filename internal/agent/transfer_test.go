@@ -1,9 +1,14 @@
 package agent
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -57,4 +62,55 @@ func TestTransferTargetWindowsSeparator(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 	_ = os.PathSeparator
+}
+
+func TestZipDirIncludesSubfolders(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "photos")
+	files := map[string]string{
+		"a.txt":            "top",
+		"sub/b.txt":        "one level",
+		"sub/deep/c.txt":   "two levels",
+		"sub/deep/x/d.bin": "three levels",
+	}
+	for rel, body := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.MkdirAll(filepath.Join(root, "empty"), 0o755)
+
+	var buf bytes.Buffer
+	if err := zipDir(context.Background(), root, &buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, "/") {
+			got[f.Name] = ""
+			continue
+		}
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		got[f.Name] = string(b)
+	}
+	for rel, body := range files {
+		if got["photos/"+rel] != body {
+			t.Errorf("photos/%s: got %q, want %q", rel, got["photos/"+rel], body)
+		}
+	}
+	if _, ok := got["photos/empty/"]; !ok {
+		t.Error("empty subfolder missing from archive")
+	}
+	if _, ok := got["_pull_errors.txt"]; ok {
+		t.Error("unexpected error list for a fully readable tree")
+	}
 }

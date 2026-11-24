@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -147,18 +149,28 @@ func (a *Agent) doPullFile(ctx context.Context, cmd proto.PullFile) error {
 	if err != nil {
 		return err
 	}
-	if fi.IsDir() {
-		return fmt.Errorf("%s is a directory, not a file", src)
-	}
 
-	f, err := openForBackup(src)
-	if err != nil {
-		return err
+	// produce writes the raw (uncompressed) payload; it is zstd-compressed
+	// on the way to the server. A folder is sent as a zip of its whole tree.
+	var produce func(w io.Writer) error
+	var total int64
+	format := ""
+	if fi.IsDir() {
+		format = "zip"
+		total = dirSize(src)
+		produce = func(w io.Writer) error { return zipDir(ctx, src, w) }
+	} else {
+		f, err := openForBackup(src)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		total = fi.Size()
+		produce = func(w io.Writer) error { _, err := io.Copy(w, f); return err }
 	}
-	defer f.Close()
 
 	pr, pw := io.Pipe()
-	prog := &pushProgress{a: a, id: cmd.TransferID, total: fi.Size()}
+	prog := &pushProgress{a: a, id: cmd.TransferID, total: total}
 	copyDone := make(chan struct{})
 	go func() {
 		defer close(copyDone)
@@ -167,7 +179,7 @@ func (a *Agent) doPullFile(ctx context.Context, cmd proto.PullFile) error {
 			pw.CloseWithError(cerr)
 			return
 		}
-		_, cerr = io.Copy(enc, io.TeeReader(f, prog))
+		cerr = produce(io.MultiWriter(enc, prog))
 		if cerr == nil {
 			cerr = enc.Close()
 		}
@@ -185,7 +197,7 @@ func (a *Agent) doPullFile(ctx context.Context, cmd proto.PullFile) error {
 		}
 	}()
 
-	uploadErr := a.client.putTransferContent(ctx, cmd.TransferID, pr)
+	uploadErr := a.client.putTransferContent(ctx, cmd.TransferID, format, pr)
 	pr.CloseWithError(fmt.Errorf("upload finished"))
 	close(watchDone)
 	<-copyDone
@@ -194,6 +206,98 @@ func (a *Agent) doPullFile(ctx context.Context, cmd proto.PullFile) error {
 	}
 	prog.flush()
 	return nil
+}
+
+// dirSize totals the regular files under root, for progress reporting only.
+func dirSize(root string) int64 {
+	var n int64
+	walkBackup(root, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && info.Mode().IsRegular() {
+			n += info.Size()
+		}
+		return nil
+	})
+	return n
+}
+
+// zipDir writes a zip archive of root — every subfolder and file in it — to
+// w. Entries are named relative to root's parent, so the archive unpacks
+// into a folder of the same name. Files or folders that cannot be read
+// (locked, access denied) are skipped rather than failing the whole pull,
+// and listed in a _pull_errors.txt entry inside the archive. Symlinks are
+// not followed.
+func zipDir(ctx context.Context, root string, w io.Writer) error {
+	zw := zip.NewWriter(w)
+	base := filepath.Dir(filepath.Clean(root))
+	var skipped []string
+
+	err := walkBackup(root, func(p string, info os.FileInfo, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			skipped = append(skipped, fmt.Sprintf("%s: %v", p, err))
+			if info != nil && info.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, rerr := filepath.Rel(base, p)
+		if rerr != nil {
+			return rerr
+		}
+		name := filepath.ToSlash(rel)
+		switch {
+		case info.IsDir():
+			if p != root && isPseudoFS(p) {
+				return fs.SkipDir
+			}
+			_, err := zw.CreateHeader(&zip.FileHeader{Name: name + "/", Modified: info.ModTime()})
+			return err
+		case !info.Mode().IsRegular():
+			return nil // symlinks, devices, sockets, pipes
+		}
+
+		f, oerr := openForBackup(p)
+		if oerr != nil {
+			skipped = append(skipped, fmt.Sprintf("%s: %v", p, oerr))
+			return nil
+		}
+		defer f.Close()
+		hdr, herr := zip.FileInfoHeader(info)
+		if herr != nil {
+			return herr
+		}
+		hdr.Name = name
+		hdr.Method = zip.Deflate
+		zf, cerr := zw.CreateHeader(hdr)
+		if cerr != nil {
+			return cerr
+		}
+		if _, cerr := io.Copy(zf, f); cerr != nil {
+			// The entry is already half-written, so the archive can't
+			// recover from a mid-file read error; fail the pull.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("read %s: %w", p, cerr)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(skipped) > 0 {
+		ew, err := zw.Create("_pull_errors.txt")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(ew, "%d item(s) could not be read and were left out:\r\n", len(skipped))
+		for _, s := range skipped {
+			fmt.Fprintf(ew, "%s\r\n", s)
+		}
+	}
+	return zw.Close()
 }
 
 // transferTarget resolves where to write on the client. A destination that

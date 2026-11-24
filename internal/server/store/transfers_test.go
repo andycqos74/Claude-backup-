@@ -64,11 +64,11 @@ func TestPullTransferFields(t *testing.T) {
 		t.Errorf("pull should start with no size/hash: %+v", got)
 	}
 
-	if err := s.SetTransferPayload("p1", "deadbeef", 4096); err != nil {
+	if err := s.SetTransferPayload("p1", "current.log", "deadbeef", 4096); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.GetTransfer("p1")
-	if got.Hash != "deadbeef" || got.Size != 4096 {
+	if got.Hash != "deadbeef" || got.Size != 4096 || got.Filename != "current.log" {
 		t.Errorf("SetTransferPayload not applied: %+v", got)
 	}
 }

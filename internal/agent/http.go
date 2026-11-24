@@ -142,9 +142,14 @@ func (c *serverClient) getTransferContent(ctx context.Context, transferID string
 }
 
 // putTransferContent uploads a pulled file's zstd-compressed content to the
-// server for a client->server transfer.
-func (c *serverClient) putTransferContent(ctx context.Context, transferID string, compressed io.Reader) error {
-	res, err := c.do(ctx, "PUT", "/api/agent/transfers/"+transferID+"/content", compressed, "application/zstd")
+// server for a client->server transfer. format is "" for a single file or
+// "zip" when a folder was archived.
+func (c *serverClient) putTransferContent(ctx context.Context, transferID, format string, compressed io.Reader) error {
+	path := "/api/agent/transfers/" + transferID + "/content"
+	if format != "" {
+		path += "?format=" + format
+	}
+	res, err := c.do(ctx, "PUT", path, compressed, "application/zstd")
 	if err != nil {
 		return err
 	}

@@ -74,9 +74,10 @@ func (s *Store) CreateTransfer(t Transfer) error {
 }
 
 // SetTransferPayload records the payload details a pull produced once the
-// agent has uploaded the file to the server.
-func (s *Store) SetTransferPayload(id, hash string, size int64) error {
-	_, err := s.db.Exec(`UPDATE transfers SET hash = ?, size = ? WHERE id = ?`, hash, size, id)
+// agent has uploaded the file to the server. filename is the name the
+// download is offered under (a pulled folder arrives as "<name>.zip").
+func (s *Store) SetTransferPayload(id, filename, hash string, size int64) error {
+	_, err := s.db.Exec(`UPDATE transfers SET filename = ?, hash = ?, size = ? WHERE id = ?`, filename, hash, size, id)
 	return err
 }
 

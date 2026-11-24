@@ -23,7 +23,7 @@
   <button class="btn primary" onclick="openBrowser('')" id="browse-btn">🗂 Browse client files</button>
   <button class="btn" onclick="el('send-dlg').showModal()">Send a file</button>
 </div>
-<p class="muted">Push a file to the client or pull one from it. Transfers run
+<p class="muted">Push a file to the client or pull a file or whole folder (as a .zip) from it. Transfers run
   in the background on the client — nothing appears on its screen — and are
   observed only here. Offline clients receive queued pushes/pulls on
   reconnect.</p>
@@ -309,9 +309,10 @@ async function browseTo(path) {
   renderBrowseRows();
 }
 function pullActionCell(e, i) {
-  if (e.is_dir) return '';
   const p = pulls[e.path];
-  if (!p) return `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`;
+  if (!p) return e.is_dir
+    ? `<button class="btn sm" onclick="pullIdx(${i})" title="Pull this folder with all its subfolders and files, as a .zip">Pull folder (zip)</button>`
+    : `<button class="btn sm" onclick="pullIdx(${i})">Pull to server</button>`;
   if (p.status === 'ready')
     return `<a class="btn sm primary" href="/api/admin/transfers/${p.id}/download">⬇ Download</a>`;
   if (p.status === 'error')
