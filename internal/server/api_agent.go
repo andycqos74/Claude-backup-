@@ -330,7 +330,18 @@ func (s *Server) handleBlobPut(w http.ResponseWriter, r *http.Request, agentID s
 
 	if putErr != nil || decErr != nil {
 		s.backend().Delete(key)
-		httpError(w, http.StatusBadRequest, "blob upload failed")
+		// Say which side failed: a storage error is the server's disk or
+		// cloud backend; a decode error means the body arrived truncated
+		// or corrupted (dropped connection, or a proxy such as Cloudflare
+		// cutting off a large request).
+		var reason string
+		if putErr != nil {
+			reason = "storage write failed: " + putErr.Error()
+		} else {
+			reason = "upload arrived incomplete or corrupted (connection dropped, or a proxy limit on request size?): " + decErr.Error()
+		}
+		log.Printf("blob %s from agent %s: %s", hash, agentID, reason)
+		httpError(w, http.StatusBadRequest, "blob upload failed: "+reason)
 		return
 	}
 	if got := hex.EncodeToString(hasher.Sum(nil)); got != hash {

@@ -428,7 +428,14 @@ func (a *Agent) uploadFile(ctx context.Context, path, expectHash string) (rawByt
 			return 0, "", ctx.Err() // cancelled mid-upload, not a content mismatch
 		}
 		if got == expectHash {
-			return 0, "", uploadErr // genuine upload failure
+			// Genuine upload failure: name the file and its size, since a
+			// size limit on a proxy in front of the server is a common cause.
+			fi, _ := os.Stat(path)
+			var size int64
+			if fi != nil {
+				size = fi.Size()
+			}
+			return 0, "", fmt.Errorf("%s (%d MB): %w", path, size>>20, uploadErr)
 		}
 		// Content changed since hashing: retry under the current hash.
 		expectHash = got
